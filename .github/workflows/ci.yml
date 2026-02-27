@@ -64,7 +64,7 @@ jobs:
       matrix:
         start_flags:
           - "--parallel"            # This tests for basic synapse-sdk end-to-end
-          - "--parallel --no-test"  # This skips testing synapse-sdk
+          - "--parallel --notest"  # This skips testing synapse-sdk
 
     steps:
     - uses: actions/checkout@v4
