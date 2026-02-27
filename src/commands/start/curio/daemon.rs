@@ -249,7 +249,7 @@ fn build_docker_create_args(
     }
 
     docker_args.push("-e".to_string());
-    docker_args.push("GOLOG_LOG_LEVEL=pdp=debug".to_string());
+    docker_args.push(crate::constants::CURIO_LOG_LEVEL.to_string());
 
     Ok(docker_args)
 }

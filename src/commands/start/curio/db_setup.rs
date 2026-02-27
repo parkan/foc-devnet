@@ -202,7 +202,7 @@ fn create_base_cluster(
     }
 
     docker_args.push("-e");
-    docker_args.push("GOLOG_LOG_LEVEL=pdp=debug");
+    docker_args.push(crate::constants::CURIO_LOG_LEVEL);
 
     // Add image and command
     let bash_cmd = format!(
@@ -315,7 +315,7 @@ fn create_pdp_layer(context: &SetupContext, sp_index: usize) -> Result<(), Box<d
     }
 
     docker_args.push("-e");
-    docker_args.push("GOLOG_LOG_LEVEL=pdp=debug");
+    docker_args.push(crate::constants::CURIO_LOG_LEVEL);
 
     // Add image and command with heredoc for config
     let bash_cmd = format!(
