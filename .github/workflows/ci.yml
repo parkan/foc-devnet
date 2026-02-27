@@ -59,6 +59,12 @@ jobs:
   integration-test:
     runs-on: ["self-hosted", "linux", "x64", "16xlarge+gpu"]
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        start_flags:
+          - "--parallel"            # This tests for basic synapse-sdk end-to-end
+          - "--parallel --no-test"  # This skips testing synapse-sdk
 
     steps:
     - uses: actions/checkout@v4
@@ -67,7 +73,7 @@ jobs:
       id: devnet-setup
       uses: ./.github/actions/devnet-setup
       with:
-        start-flags: "--parallel"
+        start-flags: "${{ matrix.start_flags }}"
         enable-caching: "true"
         curio: ${{ inputs.curio || '' }}
         lotus: ${{ inputs.lotus || '' }}
