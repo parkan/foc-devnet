@@ -39,178 +39,35 @@ jobs:
     timeout-minutes: 120
 
     steps:
-    # ──────────────────────────────────────────────
-    # Phase 1: Checkout & Environment Setup
-    # ──────────────────────────────────────────────
     - uses: actions/checkout@v4
 
-    - name: "EXEC: {Free up disk space}, independent"
-      uses: endersonmenezes/free-disk-space@v3
+    - name: "Setup devnet"
+      id: devnet-setup
+      uses: ./.github/actions/devnet-setup
       with:
-        remove_android: true
-        remove_dotnet: true
-        remove_haskell: true
-        remove_tool_cache: true
-        remove_swap: true
-        remove_packages: >-
-          azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable
-          firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*
-        remove_packages_one_command: true
-        remove_folders: >-
-          /usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules
-          /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia
-          /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle
-        rm_cmd: "rmz"
-        rmz_version: "3.1.1"
-
-    - name: "EXEC: {Setup Rust toolchain}, independent"
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-
-    - name: "EXEC: {Setup Docker}, independent"
-      uses: docker/setup-buildx-action@v3
-
-    - name: "EXEC: {Install build dependencies}, independent"
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y tar openssl pkg-config libssl-dev
-
-    # ──────────────────────────────────────────────
-    # Phase 2: Build foc-devnet binary
-    # ──────────────────────────────────────────────
-    - name: "EXEC: {Build foc-devnet binary}, independent"
-      run: cargo build --release
-
-    - name: "EXEC: {Copy binary and clean Rust artifacts}, independent"
-      run: |
-        cp ./target/release/foc-devnet ./foc-devnet
-        rm -rf ~/.cargo/registry/
-        rm -rf ~/.cargo/git/db/
-        rm -rf target/
-        df -h
-
-    # ──────────────────────────────────────────────
-    # Phase 3: Initialize, build components, download proof params
-    # ──────────────────────────────────────────────
-    - name: "CHECK: {Build init flags from inputs}"
-      id: init-flags
-      run: |
-        FLAGS=""
-        if [ -n "${{ inputs.curio }}" ]; then
-          FLAGS="$FLAGS --curio ${{ inputs.curio }}"
-        fi
-        if [ -n "${{ inputs.lotus }}" ]; then
-          FLAGS="$FLAGS --lotus ${{ inputs.lotus }}"
-        fi
-        if [ -n "${{ inputs.filecoin_services }}" ]; then
-          FLAGS="$FLAGS --filecoin-services ${{ inputs.filecoin_services }}"
-        fi
-        if [ -n "${{ inputs.synapse_sdk }}" ]; then
-          FLAGS="$FLAGS --synapse-sdk ${{ inputs.synapse_sdk }}"
-        fi
-        echo "flags=$FLAGS" >> $GITHUB_OUTPUT
-        echo "Init flags: $FLAGS"
-
-    - name: "EXEC: {Initialize foc-devnet}, independent"
-      run: |
-        rm -rf ~/.foc-devnet
-        ./foc-devnet init ${{ steps.init-flags.outputs.flags }}
-
-    - name: "EXEC: {Build Lotus}, independent"
-      run: ./foc-devnet build lotus
-
-    - name: "EXEC: {Build Curio}, independent"
-      run: ./foc-devnet build curio
-
-    - name: "EXEC: {Clean up build caches}, independent"
-      run: |
-        sudo rm -rf ~/.foc-devnet/docker/volumes/cache
-        sudo rm -rf ~/.foc-devnet/code/lotus
-        sudo rm -rf ~/.foc-devnet/code/curio
-        df -h
-
-    - name: "EXEC: {Download proof parameters from S3}, independent"
-      run: |
-        mkdir -p ~/.foc-devnet/docker/volumes/cache/filecoin-proof-parameters/
-        curl -L https://fil-proof-params-2k-cache.s3.us-east-2.amazonaws.com/filecoin-proof-params-2k.tar \
-          -o /tmp/filecoin-proof-params-2k.tar
-        tar -xf /tmp/filecoin-proof-params-2k.tar \
-          -C ~/.foc-devnet/docker/volumes/cache/filecoin-proof-parameters/
-        rm /tmp/filecoin-proof-params-2k.tar
-        ls -lath ~/.foc-devnet/docker/volumes/cache/filecoin-proof-parameters/
-
-    # ──────────────────────────────────────────────
-    # Phase 4: Start devnet
-    # ──────────────────────────────────────────────
-    - name: "EXEC: {Configure host.docker.internal}, independent"
-      run: echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts
-
-    - name: "EXEC: {Start devnet cluster (notest)}, independent"
-      id: start_cluster
-      continue-on-error: true
-      run: ./foc-devnet start --parallel --notest
-
-    - name: "EXEC: {Collect debug info}, independent"
-      if: always()
-      run: |
-        RUN_DIR="$HOME/.foc-devnet/state/latest"
-
-        echo "+++++++++++ foc-devnet version"
-        cat "$RUN_DIR/version.txt" 2>/dev/null || echo "No version file found"
-
-        echo "+++++++++++ Disk space"
-        sudo df -h 2>/dev/null || echo "df command failed"
-
-        echo "+++++++++++ Run Directory Contents"
-        ls -lath "$RUN_DIR" 2>/dev/null || echo "No run directory found"
-
-        echo "+++++++++++ Contract Addresses"
-        cat "$RUN_DIR/contract_addresses.json" 2>/dev/null || echo "No contract addresses file found"
-
-        echo "+++++++++++ Step Context"
-        cat "$RUN_DIR/step_context.json" 2>/dev/null || echo "No step context file found"
-
-        echo "+++++++++++ FOC Metadata"
-        cat "$RUN_DIR/foc_metadata.json" 2>/dev/null || echo "No foc metadata file found"
-
-        echo "+++++++++++ Container Logs"
-        if [ -d "$RUN_DIR/logs" ]; then
-          for logfile in "$RUN_DIR/logs"/*; do
-            if [ -f "$logfile" ]; then
-              echo ""
-              echo "Logs from $(basename "$logfile")"
-              cat "$logfile" 2>/dev/null || echo "Failed to read $logfile"
-            fi
-          done
-        else
-          echo "No container logs directory found"
-        fi
-
-    - name: "EXEC: {Check cluster status}, independent"
-      run: ./foc-devnet status
+        start-flags: "--parallel --notest"
+        curio: ${{ inputs.curio || '' }}
+        lotus: ${{ inputs.lotus || '' }}
+        filecoin-services: ${{ inputs.filecoin_services || '' }}
+        synapse-sdk: ${{ inputs.synapse_sdk || '' }}
 
     - name: "CHECK: {Fail early if start failed}"
-      if: steps.start_cluster.outcome == 'failure'
+      if: steps.devnet-setup.outputs.start-outcome == 'failure'
       run: |
         echo "Devnet start failed. Cannot proceed with e2e tests." >&2
         exit 1
 
-    # ──────────────────────────────────────────────
-    # Phase 5: Install test tooling (cqlsh, Node.js)
-    # ──────────────────────────────────────────────
-    - name: "EXEC: {Install cqlsh via Python venv}, independent"
+    - name: "EXEC: {Install cqlsh via Python venv}"
       run: |
         sudo apt-get install -y python3.12-venv
         python3 -m venv ~/.foc-devnet/venv
         ~/.foc-devnet/venv/bin/pip install cqlsh
 
-    - name: "EXEC: {Setup Node.js}, independent"
+    - name: "EXEC: {Setup Node.js}"
       uses: actions/setup-node@v4
       with:
         node-version: "20"
 
-    # ──────────────────────────────────────────────
-    # Phase 6: Extract devnet metadata
-    # ──────────────────────────────────────────────
     - name: "CHECK: {Extract devnet info}"
       id: devnet-info
       run: |
@@ -230,9 +87,6 @@ jobs:
         echo "Yugabyte container:  $YUGABYTE_CONTAINER"
         echo "YCQL port:           $YCQL_PORT"
 
-    # ──────────────────────────────────────────────
-    # Phase 7: Assert clean initial state
-    # ──────────────────────────────────────────────
     - name: "CHECK: {Assert initial PDP state is clean}"
       env:
         YUGABYTE_CONTAINER: ${{ steps.devnet-info.outputs.yugabyte-container }}
@@ -271,10 +125,7 @@ jobs:
 
         echo "PASS: Initial PDP state is clean."
 
-    # ──────────────────────────────────────────────
-    # Phase 8: Run Synapse SDK e2e storage test
-    # ──────────────────────────────────────────────
-    - name: "EXEC: {Install Synapse SDK dependencies}, independent"
+    - name: "EXEC: {Install Synapse SDK dependencies}"
       run: |
         SYNAPSE_DIR="$HOME/.foc-devnet/code/synapse-sdk"
         if [ ! -d "$SYNAPSE_DIR" ]; then
@@ -285,15 +136,12 @@ jobs:
         cd "$SYNAPSE_DIR"
         npm install
 
-    - name: "EXEC: {Run Synapse e2e storage runner (10MB + 120MB)}, independent"
+    - name: "EXEC: {Run Synapse e2e storage runner (10MB + 120MB)}"
       id: synapse_e2e
       run: |
         cd "$HOME/.foc-devnet/code/synapse-sdk"
         NETWORK=devnet node utils/example-storage-e2e-runner.js 10MB 120MB
 
-    # ──────────────────────────────────────────────
-    # Phase 9: Wait for caching tasks and verify
-    # ──────────────────────────────────────────────
     - name: "CHECK: {Wait for PDP SaveCache task to complete}"
       env:
         RUN_ID: ${{ steps.devnet-info.outputs.run-id }}
@@ -400,9 +248,6 @@ jobs:
 
         echo "PASS: All piecerefs have needs_save_cache=false."
 
-    # ──────────────────────────────────────────────
-    # Phase 10: On-chain proving verification (placeholder)
-    # ──────────────────────────────────────────────
     - name: "TODO: {Verify on-chain PDP proving}"
       run: |
         echo "============================================"
@@ -420,15 +265,6 @@ jobs:
         echo ""
         echo "Skipping for now."
 
-    # ──────────────────────────────────────────────
-    # Phase 11: Cleanup
-    # ──────────────────────────────────────────────
-    - name: "EXEC: {Stop cluster}, independent"
+    - name: "EXEC: {Stop cluster}"
       if: always()
       run: ./foc-devnet stop
-
-    - name: "CHECK: {Final job status}"
-      if: always() && steps.start_cluster.outcome == 'failure'
-      run: |
-        echo "Devnet start failed; job is marked as failed." >&2
-        exit 1
