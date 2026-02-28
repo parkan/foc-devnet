@@ -7,11 +7,11 @@
 
 use super::super::step::SetupContext;
 use super::constants::TEST_FILE_SIZE_BYTES;
+use crate::docker::builder::ContainerRunBuilder;
 use rand::Rng;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -117,45 +117,31 @@ fn upload_test_file(
     // Use external port via host network for stricter testing
     let service_url = format!("http://localhost:{}", port);
 
-    // Mount the test file directory into foc-builder and use it
     let file_dir = file_path.parent().ok_or("Invalid file path")?;
     let file_name = file_path.file_name().ok_or("Invalid file name")?;
     let container_file_path = format!("/tmp/test-data/{}", file_name.to_string_lossy());
 
-    // Mount bin directory where pdptool is located
     let bin_dir = crate::paths::foc_devnet_bin();
 
-    let args = [
-        "run",
-        "--rm",
-        "--network",
-        "host",
-        "-v",
-        &format!("{}:/tmp/test-data", file_dir.display()),
-        "-v",
-        &format!("{}:/usr/local/bin/lotus-bins", bin_dir.display()),
-        crate::constants::BUILDER_DOCKER_IMAGE,
-        "/usr/local/bin/lotus-bins/pdptool",
-        "upload-piece",
-        "--service-url",
-        &service_url,
-        "--service-name",
-        "public",
-        "--hash-type",
-        "commp",
-        &container_file_path,
-        "--verbose",
-    ];
-
-    let output = Command::new("docker").args(args).output()?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "pdptool upload failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
+    let output = ContainerRunBuilder::run()
+        .rm()
+        .network("host")
+        .volume(&file_dir.display().to_string(), "/tmp/test-data")
+        .volume(&bin_dir.display().to_string(), "/usr/local/bin/lotus-bins")
+        .image(crate::constants::BUILDER_DOCKER_IMAGE)
+        .cmd(&[
+            "/usr/local/bin/lotus-bins/pdptool",
+            "upload-piece",
+            "--service-url",
+            &service_url,
+            "--service-name",
+            "public",
+            "--hash-type",
+            "commp",
+            &container_file_path,
+            "--verbose",
+        ])
+        .run_raw()?;
 
     info!(
         "File uploaded via pdptool (foc-builder, external port {})",

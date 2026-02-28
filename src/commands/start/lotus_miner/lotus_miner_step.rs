@@ -6,7 +6,7 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use super::container_ops::start_miner_container;
-use super::docker_command::build_miner_docker_command;
+use super::docker_command::build_miner_builder;
 use super::setup::{find_preseal_files, setup_miner_directories};
 use super::verification::perform_post_execution_verification;
 use crate::commands::start::step::{SetupContext, Step};
@@ -54,8 +54,8 @@ impl Step for LotusMinerStep {
 
         setup_miner_directories(&self.volumes_dir)?;
         let preseal_files = find_preseal_files(run_id)?;
-        let docker_args = build_miner_docker_command(&self.volumes_dir, &preseal_files, context)?;
-        start_miner_container(docker_args, context)?;
+        let builder = build_miner_builder(&self.volumes_dir, &preseal_files, context)?;
+        start_miner_container(builder, context)?;
         Ok(())
     }
 

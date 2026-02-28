@@ -1,13 +1,11 @@
 //! Container operations for Lotus-Miner.
-//!
-//! This module provides utilities for starting and managing Lotus-Miner containers.
 
 use std::error::Error;
 use tracing::info;
 
 use super::constants::CONTAINER_ID_DISPLAY_LENGTH;
 use crate::commands::start::step::SetupContext;
-use crate::docker::command_logger::run_and_log_command_strings;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::docker::containers::lotus_miner_container_name;
 use crate::docker::network::{connect_container_to_network, lotus_miner_network_name};
 
@@ -17,9 +15,9 @@ pub fn get_container_name(context: &SetupContext) -> Result<String, Box<dyn Erro
     Ok(lotus_miner_container_name(run_id))
 }
 
-/// Start the Lotus-Miner container
+/// Start the Lotus-Miner container from a builder
 pub fn start_miner_container(
-    docker_args: Vec<String>,
+    builder: ContainerRunBuilder,
     context: &SetupContext,
 ) -> Result<(), Box<dyn Error>> {
     let container_name = get_container_name(context)?;
@@ -28,7 +26,7 @@ pub fn start_miner_container(
 
     info!("Starting Lotus-Miner container '{}'...", container_name);
     let key = format!("lotus_miner_container_start_{}", container_name);
-    let output = run_and_log_command_strings("docker", &docker_args, context, &key)?;
+    let output = builder.run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(
@@ -42,15 +40,14 @@ pub fn start_miner_container(
     context.set("lotus_miner_container_id", container_id.clone());
     context.set("lotus_miner_container_name", container_name.clone());
     info!(
-        "✓ Container started with ID: {}",
+        "Container started with ID: {}",
         &container_id[..CONTAINER_ID_DISPLAY_LENGTH]
     );
 
-    // Connect to porep-miner network for miner operations
-    // (Container already on filecoin network for Lotus access)
+    // connect to porep-miner network for miner operations
     info!("Connecting to porep-miner network...");
     connect_container_to_network(&container_name, &porep_network)?;
-    info!("✓ Connected to porep-miner network");
+    info!("Connected to porep-miner network");
 
     Ok(())
 }

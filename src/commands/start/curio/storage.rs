@@ -6,7 +6,7 @@ use super::super::step::SetupContext;
 use super::constants::{
     CURIO_FAST_STORAGE_PATH, CURIO_LONG_TERM_STORAGE_PATH, STORAGE_ATTACH_WAIT_SECS,
 };
-use crate::docker::command_logger::run_and_log_command;
+use crate::docker::builder::ContainerRunBuilder;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
@@ -18,20 +18,15 @@ fn wait_for_curio_rpc(context: &SetupContext, container_name: &str) -> Result<()
 
     let machine_addr = format!("{}:12300", container_name);
     let key = format!("curio_wait_api_{}", container_name);
-    let output = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            container_name,
+    let output = ContainerRunBuilder::exec(container_name)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/curio",
             "cli",
             "--machine",
             &machine_addr,
             "wait-api",
-        ],
-        context,
-        &key,
-    )?;
+        ])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(
@@ -81,11 +76,8 @@ fn attach_fast_storage(context: &SetupContext, container_name: &str) -> Result<(
     let machine_addr = format!("{}:12300", container_name);
 
     let key = format!("curio_storage_attach_fast_{}", container_name);
-    let output = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            container_name,
+    let output = ContainerRunBuilder::exec(container_name)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/curio",
             "cli",
             "--machine",
@@ -95,10 +87,8 @@ fn attach_fast_storage(context: &SetupContext, container_name: &str) -> Result<(
             "--init",
             "--seal",
             CURIO_FAST_STORAGE_PATH,
-        ],
-        context,
-        &key,
-    )?;
+        ])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(
@@ -126,11 +116,8 @@ fn attach_long_term_storage(
     let machine_addr = format!("{}:12300", container_name);
 
     let key = format!("curio_storage_attach_long_term_{}", container_name);
-    let output = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            container_name,
+    let output = ContainerRunBuilder::exec(container_name)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/curio",
             "cli",
             "--machine",
@@ -140,10 +127,8 @@ fn attach_long_term_storage(
             "--init",
             "--store",
             CURIO_LONG_TERM_STORAGE_PATH,
-        ],
-        context,
-        &key,
-    )?;
+        ])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(

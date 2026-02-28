@@ -31,7 +31,7 @@ use yugabyte::YugabyteStep;
 use crate::commands::start::usdfc_funding::USDFCFundingStep;
 use crate::config::Config;
 use crate::docker::core::{container_is_running, remove_container, stop_container};
-use crate::docker::{create_all_networks, start_portainer};
+use crate::docker::create_all_networks;
 use crate::paths::{foc_devnet_config, foc_devnet_run_dir};
 use crate::run_id::{create_latest_symlink, save_current_run_id};
 use crate::version_info::write_version_file;
@@ -139,28 +139,27 @@ fn perform_regenesis_legacy() -> Result<(), Box<dyn std::error::Error>> {
                     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("/"));
                     let file_name = path.file_name().unwrap().to_string_lossy();
 
-                    let status = std::process::Command::new("docker")
-                        .args([
-                            "run",
-                            "-u",
-                            "root",
-                            "-v",
-                            &format!("{}:/work", parent.display()),
-                            crate::constants::BUILDER_DOCKER_IMAGE,
-                            "rm",
-                            "-rf",
-                            &format!("/work/{}", file_name),
-                        ])
-                        .status()?;
-
-                    if status.success() {
-                        info!("Removed with Docker: {}", path.display());
-                    } else {
-                        return Err(format!(
-                            "Failed to remove {} even with Docker",
-                            path.display()
-                        )
-                        .into());
+                    let mount = crate::docker::bind_mount(
+                        &parent.display().to_string(),
+                        "/work",
+                    );
+                    let rm_target = format!("/work/{}", file_name);
+                    let args = vec![
+                        "run", "--rm", "-u", "root", "-v", &mount,
+                        crate::constants::BUILDER_DOCKER_IMAGE,
+                        "rm", "-rf", &rm_target,
+                    ];
+                    match crate::docker::docker_command(&args) {
+                        Ok(_) => {
+                            info!("Removed with Docker: {}", path.display());
+                        }
+                        Err(_) => {
+                            return Err(format!(
+                                "Failed to remove {} even with Docker",
+                                path.display()
+                            )
+                            .into());
+                        }
                     }
                 } else {
                     return Err(e.into());
@@ -337,7 +336,6 @@ fn execute_cluster_steps(
     run_id: &str,
     config: &Config,
     parallel: bool,
-    portainer_port: u16,
     notest: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Ensure genesis prerequisites are ready (one-time setup, needs config for sector count)
@@ -377,7 +375,6 @@ fn execute_cluster_steps(
                 run_dir: run_dir.to_path_buf(),
                 port_start: config.port_range_start,
                 port_count: config.port_range_count,
-                portainer_port: Some(portainer_port),
                 active_pdp_sp_count: config.active_pdp_sp_count,
                 approved_pdp_sp_count: config.approved_pdp_sp_count,
             },
@@ -393,7 +390,6 @@ fn execute_cluster_steps(
                 run_dir: run_dir.to_path_buf(),
                 port_start: config.port_range_start,
                 port_count: config.port_range_count,
-                portainer_port: Some(portainer_port),
                 active_pdp_sp_count: config.active_pdp_sp_count,
                 approved_pdp_sp_count: config.approved_pdp_sp_count,
             },
@@ -429,16 +425,6 @@ pub fn start_cluster(
 
     let config = load_and_validate_config()?;
 
-    // Allocate port for Portainer (first port in dynamic range)
-    let mut port_allocator = crate::port_allocator::PortAllocator::new(
-        config.port_range_start,
-        config.port_range_count,
-    )?;
-    let portainer_port = port_allocator.allocate()?;
-
-    // Start Portainer
-    start_portainer(&run_id, portainer_port)?;
-
     // Create networks
     create_all_networks(&run_id, config.active_pdp_sp_count)?;
 
@@ -449,7 +435,6 @@ pub fn start_cluster(
         &run_id,
         &config,
         parallel,
-        portainer_port,
         notest,
     );
 

@@ -1,6 +1,6 @@
 use super::step::{SetupContext, Step};
 use crate::constants::YUGABYTE_DOCKER_IMAGE;
-use crate::docker::command_logger::run_and_log_command;
+use crate::docker::builder::ContainerRunBuilder;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -26,21 +26,15 @@ fn spawn_yugabyte_instance(
     run_id: &str,
     context: &SetupContext,
 ) -> Result<(), Box<dyn Error>> {
-    // Generate container name with instance suffix
-    // Format: foc-{run_id}-yugabyte-{instance_index} (always indexed for consistency)
     let container_name = yugabyte_container_name(run_id, sp_idx);
     let network_name = pdp_miner_network_name(run_id, sp_idx);
 
-    // Create data directory for this instance
-    // This will be mounted to /home/foc-user/yb_base in the container
-    // yugabyted will create subdirectories (data/, conf/, logs/) under this base directory
     let data_dir = foc_devnet_yugabyte_sp_volume(run_id, sp_idx);
     std::fs::create_dir_all(&data_dir)?;
 
-    // Stop and remove existing container if it exists
     if container_exists(&container_name)? {
         warn!(
-            "⚠ Removing existing Yugabyte container {} ...",
+            "Removing existing Yugabyte container {} ...",
             if total_instances == 1 {
                 "".to_string()
             } else {
@@ -50,67 +44,33 @@ fn spawn_yugabyte_instance(
         stop_and_remove_container(&container_name)?;
     }
 
-    // Build Docker run command
-    let mut docker_args = vec![
-        "run",
-        "-d",
-        "--name",
-        &container_name,
-        "--network",
-        &network_name,
-    ];
+    let builder = ContainerRunBuilder::daemon(&container_name, &network_name)
+        .port(ports[0], 5433)
+        .port(ports[1], 9042)
+        .port(ports[2], 7100)
+        .port(ports[3], 7000)
+        .port(ports[4], 9100)
+        .port(ports[5], 9000)
+        .port(ports[6], 15433)
+        .volume(&data_dir.display().to_string(), "/home/foc-user/yb_base")
+        .env("YSQL_PASSWORD", "yugabyte")
+        .env("YSQL_DB", "yugabyte")
+        .env("YSQL_USER", "yugabyte")
+        .image(YUGABYTE_DOCKER_IMAGE)
+        .cmd(&[
+            "/yugabyte/bin/yugabyted",
+            "start",
+            "--base_dir=/home/foc-user/yb_base",
+            "--ui=true",
+            "--callhome=false",
+            "--advertise_address=0.0.0.0",
+            "--master_flags=rpc_bind_addresses=0.0.0.0",
+            "--tserver_flags=rpc_bind_addresses=0.0.0.0,pgsql_proxy_bind_address=0.0.0.0:5433,cql_proxy_bind_address=0.0.0.0:9042",
+            "--daemon=false",
+        ]);
 
-    // Add port mappings
-    let port_mappings = vec![
-        format!("{}:5433", ports[0]),  // YSQL
-        format!("{}:9042", ports[1]),  // YCQL
-        format!("{}:7100", ports[2]),  // Master RPC
-        format!("{}:7000", ports[3]),  // Master UI
-        format!("{}:9100", ports[4]),  // TServer RPC
-        format!("{}:9000", ports[5]),  // TServer UI
-        format!("{}:15433", ports[6]), // Web UI
-    ];
-
-    for mapping in &port_mappings {
-        docker_args.push("-p");
-        docker_args.push(mapping);
-    }
-
-    // Add volume mount - mount to /home/foc-user/yb_base which yugabyted will use as base_dir
-    let data_dir_str = data_dir.to_str().ok_or("Invalid path")?;
-    let volume_mount = format!("{}:/home/foc-user/yb_base", data_dir_str);
-    docker_args.extend_from_slice(&["-v", &volume_mount]);
-
-    // Add environment variables
-    docker_args.extend_from_slice(&[
-        "-e",
-        "YSQL_PASSWORD=yugabyte",
-        "-e",
-        "YSQL_DB=yugabyte",
-        "-e",
-        "YSQL_USER=yugabyte",
-    ]);
-
-    // Add image name
-    docker_args.push(YUGABYTE_DOCKER_IMAGE);
-
-    // Add YugabyteDB startup command with full configuration
-    // CRITICAL: --base_dir must match the volume mount location
-    docker_args.extend_from_slice(&[
-        "/yugabyte/bin/yugabyted",
-        "start",
-        "--base_dir=/home/foc-user/yb_base",
-        "--ui=true",
-        "--callhome=false",
-        "--advertise_address=0.0.0.0",
-        "--master_flags=rpc_bind_addresses=0.0.0.0",
-        "--tserver_flags=rpc_bind_addresses=0.0.0.0,pgsql_proxy_bind_address=0.0.0.0:5433,cql_proxy_bind_address=0.0.0.0:9042",
-        "--daemon=false",
-    ]);
-
-    // Run the container
     let key = format!("yugabyte_start_sp_{}", sp_idx);
-    let output = run_and_log_command("docker", &docker_args, context, &key)?;
+    let output = builder.run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(
@@ -132,17 +92,11 @@ fn verify_postgres_connection_for_instance(
     const MAX_RETRIES: u32 = 30;
     const RETRY_DELAY_SECS: u64 = 2;
 
-    // YugabyteDB YSQL service takes time to initialize after the container starts
-    // Retry connection attempts with delays
     for attempt in 1..=MAX_RETRIES {
         let key = format!("yugabyte_verify_{}_{}", container_name, attempt);
-        let output = run_and_log_command(
-            "docker",
-            &[
-                "exec",
-                "-e",
-                "PGPASSWORD=yugabyte",
-                container_name,
+        let output = ContainerRunBuilder::exec(container_name)
+            .env("PGPASSWORD", "yugabyte")
+            .cmd(&[
                 "/yugabyte/bin/ysqlsh",
                 "-h",
                 "localhost",
@@ -154,20 +108,16 @@ fn verify_postgres_connection_for_instance(
                 "yugabyte",
                 "-c",
                 "SELECT 1;",
-            ],
-            context,
-            &key,
-        )?;
+            ])
+            .run_logged(context, &key)?;
 
         if output.status.success() {
             return Ok(());
         }
 
-        // If not the last attempt, wait before retrying
         if attempt < MAX_RETRIES {
             thread::sleep(Duration::from_secs(RETRY_DELAY_SECS));
         } else {
-            // Last attempt failed, return error
             return Err(format!(
                 "Failed to query PostgreSQL: {}",
                 String::from_utf8_lossy(&output.stderr)

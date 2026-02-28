@@ -9,12 +9,12 @@ use super::constants::{DB_SETUP_WAIT_SECS, PDP_LAYER_CONFIG_TEMPLATE};
 use crate::commands::start::foc_deploy::contract_addresses::ContractAddresses;
 use crate::commands::start::genesis::constants::PDP_SP_MINER_ID_START;
 use crate::commands::start::lotus_utils::{build_fullnode_api_info, read_lotus_token};
-use crate::docker::command_logger::run_and_log_command;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::docker::containers::lotus_container_name;
 use crate::docker::core::docker_command;
 use crate::docker::network::{lotus_network_name, pdp_miner_network_name};
 use crate::paths::foc_devnet_bin;
-use crate::paths::foc_devnet_docker_volumes;
+use crate::paths::foc_devnet_docker_volumes_run_specific;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
@@ -153,69 +153,39 @@ fn create_base_cluster(
     let pdp_network = pdp_miner_network_name(run_id, sp_index);
     let lotus_network = lotus_network_name(run_id);
 
-    // Get binary directory for volume mount
     let bin_dir = foc_devnet_bin();
-    let bin_mount = format!("{}:/usr/local/bin/lotus-bins", bin_dir.display());
-
-    // Get lotus-data directory for volume mount (needed for token and LOTUS_PATH)
-    let lotus_data_dir = foc_devnet_docker_volumes().join("lotus-data");
-    let lotus_data_mount = format!("{}:/lotus-data", lotus_data_dir.display());
-
-    // Create a unique container name for this operation
+    let lotus_data_dir = foc_devnet_docker_volumes_run_specific(run_id).join("lotus-data");
     let container_name = format!("foc-{}-curio-db-setup-{}", run_id, sp_index);
 
-    // Build docker run command with database env vars
-    let mut docker_args = vec![
-        "run",
-        "-d",
-        "--name",
-        &container_name,
-        "--network",
-        &pdp_network,
-        "-v",
-        &bin_mount,
-        "-v",
-        &lotus_data_mount,
-    ];
-
-    // Add environment variables for database connection
-    let foc_env = build_foc_contract_env_vars(context)?;
-    let db_env = build_db_env_vars(context, sp_index)?;
-    let lotus_env = build_lotus_env_vars(context)?;
-
-    for env in &db_env {
-        docker_args.push("-e");
-        docker_args.push(env);
-    }
-
-    for env in &foc_env {
-        docker_args.push("-e");
-        docker_args.push(env);
-    }
-
-    for env in &lotus_env {
-        docker_args.push("-e");
-        docker_args.push(env);
-    }
-
-    // Add image and command
     let bash_cmd = format!(
         "sleep 3 && /usr/local/bin/lotus-bins/curio config new-cluster {}",
         miner_id
     );
-    docker_args.extend_from_slice(&[
-        crate::constants::CURIO_DOCKER_IMAGE,
-        "/bin/bash",
-        "-c",
-        &bash_cmd,
-    ]);
 
-    let docker_args_str: Vec<&str> = docker_args.iter().map(|s| s.as_ref()).collect();
+    // build container with env vars from shared builders
+    let foc_env = build_foc_contract_env_vars(context)?;
+    let db_env = build_db_env_vars(context, sp_index)?;
+    let lotus_env = build_lotus_env_vars(context)?;
+
+    let mut builder = ContainerRunBuilder::run()
+        .name(&container_name)
+        .network(&pdp_network)
+        .detach()
+        .volume(&bin_dir.display().to_string(), "/usr/local/bin/lotus-bins")
+        .volume(&lotus_data_dir.display().to_string(), "/lotus-data")
+        .image(crate::constants::CURIO_DOCKER_IMAGE)
+        .cmd(&["/bin/bash", "-c", &bash_cmd]);
+
+    for env_str in db_env.iter().chain(foc_env.iter()).chain(lotus_env.iter()) {
+        if let Some((k, v)) = env_str.split_once('=') {
+            builder = builder.env(k, v);
+        }
+    }
+
     let key = format!("curio_new_cluster_sp_{}", sp_index);
-    let output = run_and_log_command("docker", &docker_args_str, context, &key)?;
+    let output = builder.run_logged(context, &key)?;
 
     if !output.status.success() {
-        // Clean up container on failure
         let _ = docker_command(&["rm", "-f", &container_name]);
         return Err(format!(
             "Failed to create base cluster for miner {}: {}",
@@ -225,13 +195,10 @@ fn create_base_cluster(
         .into());
     }
 
-    // Connect to Lotus network for Lotus daemon access
+    // connect to lotus network for daemon access
     let _ = docker_command(&["network", "connect", &lotus_network, &container_name]);
 
-    // Wait for the command to complete
     let output = docker_command(&["wait", &container_name])?;
-
-    // Clean up container
     let _ = docker_command(&["rm", "-f", &container_name]);
 
     if !output.status.success() {
@@ -242,7 +209,6 @@ fn create_base_cluster(
         .into());
     }
 
-    // Wait for DB changes to propagate
     thread::sleep(Duration::from_secs(DB_SETUP_WAIT_SECS));
 
     info!("Base cluster created for miner {}", miner_id);
@@ -260,73 +226,39 @@ fn create_pdp_layer(context: &SetupContext, sp_index: usize) -> Result<(), Box<d
     let pdp_network = pdp_miner_network_name(run_id, sp_index);
     let lotus_network = lotus_network_name(run_id);
 
-    // Get binary directory for volume mount
     let bin_dir = foc_devnet_bin();
-    let bin_mount = format!("{}:/usr/local/bin/lotus-bins", bin_dir.display());
-
-    // Get lotus-data directory for volume mount (needed for token and LOTUS_PATH)
-    let lotus_data_dir = foc_devnet_docker_volumes().join("lotus-data");
-    let lotus_data_mount = format!("{}:/lotus-data", lotus_data_dir.display());
-
-    // Generate PDP layer config with sp_index
+    let lotus_data_dir = foc_devnet_docker_volumes_run_specific(run_id).join("lotus-data");
     let pdp_config = PDP_LAYER_CONFIG_TEMPLATE.replace("{sp_index}", &sp_index.to_string());
-
-    // Create a unique container name for this operation
     let container_name = format!("foc-{}-curio-pdp-setup-{}", run_id, sp_index);
 
-    // Build docker run command with database env vars
-    let mut docker_args = vec![
-        "run",
-        "-d",
-        "--name",
-        &container_name,
-        "--network",
-        &pdp_network,
-        "-v",
-        &bin_mount,
-        "-v",
-        &lotus_data_mount,
-    ];
-
-    // Add environment variables for database connection
-    let foc_env = build_foc_contract_env_vars(context)?;
-    let db_env = build_db_env_vars(context, sp_index)?;
-    let lotus_env = build_lotus_env_vars(context)?;
-
-    for env in &db_env {
-        docker_args.push("-e");
-        docker_args.push(env);
-    }
-
-    for env in &foc_env {
-        docker_args.push("-e");
-        docker_args.push(env);
-    }
-
-    for env in &lotus_env {
-        docker_args.push("-e");
-        docker_args.push(env);
-    }
-
-    // Add image and command with heredoc for config
     let bash_cmd = format!(
         "sleep 5 && /usr/local/bin/lotus-bins/curio config create --title pdp-only << 'EOF'\n{}\nEOF",
         pdp_config
     );
 
-    docker_args.extend_from_slice(&[
-        crate::constants::CURIO_DOCKER_IMAGE,
-        "/bin/bash",
-        "-c",
-        &bash_cmd,
-    ]);
+    let foc_env = build_foc_contract_env_vars(context)?;
+    let db_env = build_db_env_vars(context, sp_index)?;
+    let lotus_env = build_lotus_env_vars(context)?;
 
-    let docker_args_str: Vec<&str> = docker_args.iter().map(|s| s.as_ref()).collect();
+    let mut builder = ContainerRunBuilder::run()
+        .name(&container_name)
+        .network(&pdp_network)
+        .detach()
+        .volume(&bin_dir.display().to_string(), "/usr/local/bin/lotus-bins")
+        .volume(&lotus_data_dir.display().to_string(), "/lotus-data")
+        .image(crate::constants::CURIO_DOCKER_IMAGE)
+        .cmd(&["/bin/bash", "-c", &bash_cmd]);
+
+    for env_str in db_env.iter().chain(foc_env.iter()).chain(lotus_env.iter()) {
+        if let Some((k, v)) = env_str.split_once('=') {
+            builder = builder.env(k, v);
+        }
+    }
+
     let key = format!("curio_pdp_layer_config_sp_{}", sp_index);
-    let output = run_and_log_command("docker", &docker_args_str, context, &key)?;
+    let output = builder.run_logged(context, &key)?;
 
     if !output.status.success() {
-        // Clean up container on failure
         let _ = docker_command(&["rm", "-f", &container_name]);
         return Err(format!(
             "Failed to create PDP layer configuration: {}",
@@ -335,13 +267,9 @@ fn create_pdp_layer(context: &SetupContext, sp_index: usize) -> Result<(), Box<d
         .into());
     }
 
-    // Connect to Lotus network for Lotus daemon access
     let _ = docker_command(&["network", "connect", &lotus_network, &container_name]);
 
-    // Wait for the command to complete
     let output = docker_command(&["wait", &container_name])?;
-
-    // Clean up container
     let _ = docker_command(&["rm", "-f", &container_name]);
 
     if !output.status.success() {

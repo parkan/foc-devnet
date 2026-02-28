@@ -5,13 +5,13 @@
 //! modules with a clean modular design.
 
 pub mod build;
+pub mod builder;
 pub mod command_logger;
 pub mod containers;
 pub mod core;
 pub mod init;
 pub mod logs;
 pub mod network;
-pub mod portainer;
 pub mod shell;
 pub mod status;
 
@@ -19,7 +19,7 @@ pub mod status;
 pub use core::{
     bind_mount, chown_command, container_exists, container_is_running, copy_from_container,
     create_container, docker_command, exec_in_container, get_current_gid, get_current_uid,
-    image_exists, is_podman, is_port_available, remove_container, run_command, run_container,
+    image_exists, is_port_available, remove_container, run_command,
     stop_and_remove_container, stop_container, wait_for_port,
 };
 
@@ -32,7 +32,7 @@ pub use command_logger::{
 };
 pub use containers::{
     builder_container_name, curio_container_name, lotus_container_name, lotus_miner_container_name,
-    portainer_container_name, yugabyte_container_name,
+    yugabyte_container_name,
 };
 pub use init::{create_volume_directories_for_images, set_volume_ownership};
 pub use logs::{
@@ -43,6 +43,5 @@ pub use network::{
     connect_container_to_network, create_all_networks, delete_all_networks,
     lotus_miner_network_name, lotus_network_name, pdp_miner_network_name,
 };
-pub use portainer::{start_portainer, stop_portainer};
 pub use shell::{cast_command, forge_command, lotus_command, lotus_wallet_command};
 pub use status::{get_container_uptime, get_running_foc_containers, get_system_start_time};

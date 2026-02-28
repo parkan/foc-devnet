@@ -5,11 +5,12 @@
 use super::docker;
 use super::logging;
 use super::Project;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::docker::core::{get_current_gid, get_current_uid};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use tracing::info;
 use tracing::warn;
 
@@ -39,12 +40,12 @@ pub fn run_build_in_container(
     let container_source_dir = "/workspace/source";
     let container_output_dir = "/workspace/output";
 
-    let docker_run_args =
-        docker::setup_docker_run_args(source_dir, output_dir, image_tag, project)?;
+    let builder =
+        docker::setup_build_builder(source_dir, output_dir, image_tag, project)?;
     let build_script =
         docker::setup_build_script(project, container_source_dir, container_output_dir);
 
-    execute_build_process(docker_run_args, build_script, &log_path, project)?;
+    execute_build_process(builder, build_script, &log_path, project)?;
 
     info!("Build logs saved to: {}", log_path.display());
 
@@ -53,19 +54,14 @@ pub fn run_build_in_container(
 
 /// Execute the build process in the Docker container.
 pub fn execute_build_process(
-    mut docker_run_args: Vec<String>,
+    builder: ContainerRunBuilder,
     build_script: String,
     log_path: &Path,
     project: &Project,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    docker_run_args.push(build_script);
+    let builder = builder.cmd(&["/bin/bash", "-c", &build_script]);
 
-    // Spawn the process with piped stdout/stderr
-    let mut child = Command::new("docker")
-        .args(&docker_run_args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut child = builder.spawn()?;
 
     // Get handles to stdout and stderr
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;

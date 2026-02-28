@@ -43,11 +43,9 @@ pub fn run_command(program: &str, args: &[&str]) -> Result<Output, Box<dyn Error
 
 /// Execute a docker command.
 ///
-/// # Arguments
-/// * `args` - Docker command arguments (without the 'docker' prefix)
-///
-/// # Returns
-/// The command output on success.
+/// For run/create/exec, use ContainerRunBuilder instead -- it applies all
+/// required rootless-podman flags by construction. This function is for
+/// non-run commands (ps, rm, wait, network, logs, etc.).
 pub fn docker_command(args: &[&str]) -> Result<Output, Box<dyn Error>> {
     run_command("docker", args)
 }
@@ -79,9 +77,12 @@ pub fn is_port_available(port: u16) -> bool {
 pub fn image_exists(image_name: &str) -> Result<bool, Box<dyn Error>> {
     let output = docker_command(&["images", "--format", "{{.Repository}}:{{.Tag}}"])?;
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let prefix = format!("{}:", image_name);
+    // podman prefixes local images with "localhost/"
+    let prefixed = format!("localhost/{}", prefix);
     Ok(stdout
         .lines()
-        .any(|line| line.starts_with(&format!("{}:", image_name))))
+        .any(|line| line.starts_with(&prefix) || line.starts_with(&prefixed)))
 }
 
 /// Check if a container with the given name exists
@@ -145,13 +146,6 @@ pub fn exec_in_container(
     let mut exec_args = vec!["exec", container, command];
     exec_args.extend_from_slice(args);
     docker_command(&exec_args)
-}
-
-/// Run a Docker container
-pub fn run_container(args: &[&str]) -> Result<Output, Box<dyn Error>> {
-    let mut run_args = vec!["run"];
-    run_args.extend_from_slice(args);
-    docker_command(&run_args)
 }
 
 /// Create a Docker container without starting it.
@@ -236,8 +230,6 @@ pub fn is_podman() -> bool {
 
 /// Format a bind mount string with SELinux label suffix.
 /// Uses :z (shared) so multiple containers can access the same host path.
-/// Both Docker and Podman accept :z -- Docker treats it as a no-op on systems
-/// without SELinux, Podman uses it for relabeling.
 pub fn bind_mount(host: &str, container: &str) -> String {
     format!("{}:{}:z", host, container)
 }

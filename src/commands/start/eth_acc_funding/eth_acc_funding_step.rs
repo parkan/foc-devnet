@@ -8,13 +8,12 @@ use super::lotus_checks::{check_lotus_running, get_global_faucet_address};
 use crate::commands::init::keys::load_keys;
 use crate::commands::start::eth_acc_funding::constants::FEVM_ACCOUNTS_PREFUNDED;
 use crate::commands::start::step::{SetupContext, Step};
-use crate::docker::command_logger::log_command;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::docker::containers::lotus_container_name;
 use crate::utils::retry::{retry_with_fixed_delay, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY_SECS};
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -183,39 +182,21 @@ impl ETHAccFundingStep {
             let account_name_clone = account_name.clone();
 
             let handle = thread::spawn(move || {
-                let description = format!("GLOBAL_FIL_FAUCET → {}", account_name);
+                let description = format!("GLOBAL_FIL_FAUCET -> {}", account_name);
                 info!("Transferring {} FIL: {}...", amount, description);
 
-                // Log the command
+                let amt = amount.to_string();
                 let key = format!("eth_acc_transfer_{}_{}", account_name_clone, container);
-                log_command(
-                    "docker",
-                    &[
-                        "exec",
-                        &container,
+                let output = ContainerRunBuilder::exec(&container)
+                    .cmd(&[
                         "/usr/local/bin/lotus-bins/lotus",
                         "send",
                         "--from",
                         &from,
                         &to_addr,
-                        &amount.to_string(),
-                    ],
-                    &context_clone,
-                    &key,
-                );
-
-                let output = Command::new("docker")
-                    .args([
-                        "exec",
-                        &container,
-                        "/usr/local/bin/lotus-bins/lotus",
-                        "send",
-                        "--from",
-                        &from,
-                        &to_addr,
-                        &amount.to_string(),
+                        &amt,
                     ])
-                    .output();
+                    .run_logged(&context_clone, &key);
 
                 match output {
                     Ok(out) if out.status.success() => {
@@ -286,39 +267,21 @@ impl ETHAccFundingStep {
             let account_name_clone = account_name.clone();
 
             let handle = thread::spawn(move || {
-                // Retry balance verification with fixed delay
                 let verify_result =
                     retry_with_fixed_delay(
                         || {
-                            // Log the command
                             let key = format!(
                                 "eth_acc_verify_balance_{}_{}",
                                 account_name_clone, container
                             );
-                            log_command(
-                                "docker",
-                                &[
-                                    "exec",
-                                    &container,
-                                    "/usr/local/bin/lotus-bins/lotus",
-                                    "wallet",
-                                    "balance",
-                                    &address,
-                                ],
-                                &context_clone,
-                                &key,
-                            );
-
-                            let output = Command::new("docker")
-                                .args([
-                                    "exec",
-                                    &container,
+                            let output = ContainerRunBuilder::exec(&container)
+                                .cmd(&[
                                     "/usr/local/bin/lotus-bins/lotus",
                                     "wallet",
                                     "balance",
                                     &address,
                                 ])
-                                .output()
+                                .run_logged(&context_clone, &key)
                                 .map_err(|e| -> Box<dyn Error> {
                                     format!("Failed to execute balance check: {}", e).into()
                                 })?;

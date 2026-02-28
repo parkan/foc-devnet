@@ -140,6 +140,11 @@ pub fn foc_devnet_docker_volumes_run_specific(run_id: &str) -> PathBuf {
     foc_devnet_docker_volumes_run_specific_root().join(run_id)
 }
 
+/// Returns the path to the SELinux policy directory, e.g., ~/.foc-devnet/selinux
+pub fn foc_devnet_selinux() -> PathBuf {
+    foc_devnet_home().join("selinux")
+}
+
 /// Returns the path to the foc-devnet configuration, e.g., ~/.foc-devnet/config.toml
 pub fn foc_devnet_config() -> PathBuf {
     foc_devnet_home().join("config.toml")

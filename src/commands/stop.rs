@@ -21,7 +21,6 @@ const CONTAINERS: &[(&str, &str)] = &[
 /// - Verifies containers are stopped
 /// - Removes containers to ensure clean state
 /// - Tears down Docker networks
-/// - Note: Portainer is not stopped to allow persistent access across runs
 /// - Force-kills any remaining foc-* containers
 /// - Deletes the run ID file
 pub fn stop_cluster() -> Result<(), Box<dyn Error>> {
@@ -55,9 +54,6 @@ pub fn stop_cluster() -> Result<(), Box<dyn Error>> {
             stop_and_remove_service_container(container_name, service_name)?;
         }
     }
-
-    // Note: Portainer is not stopped to allow persistent access across runs
-    info!("ℹ Portainer will remain running for persistent access");
 
     // Force kill any remaining foc* containers (including stopped ones)
     force_kill_foc_containers()?;

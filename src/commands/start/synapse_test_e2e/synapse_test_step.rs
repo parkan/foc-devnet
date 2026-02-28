@@ -1,7 +1,6 @@
 use crate::commands::init::keys::{load_keys, KeyInfo};
 use crate::commands::start::step::{SetupContext, Step};
-use crate::constants::BUILDER_DOCKER_IMAGE;
-use crate::docker::core::docker_command;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::paths::{
     contract_addresses_file, foc_devnet_docker_volumes_cache, foc_devnet_keys,
     foc_devnet_synapse_sdk_repo,
@@ -89,20 +88,16 @@ impl Step for SynapseTestE2EStep {
         let builder_volumes_dir =
             foc_devnet_docker_volumes_cache().join(crate::constants::BUILDER_CONTAINER);
 
-        // Load contract addresses and keys
         let addresses = load_contract_addresses(run_id)?;
         let keys = load_wallet_keys()?;
 
-        // Extract required addresses and keys
         let (user_key, warm_storage_addr, usdfc_addr, multicall3_addr, sp_registry_addr) =
             extract_required_addresses(&addresses, &keys)?;
 
         let lotus_rpc_url = crate::commands::start::lotus_utils::get_lotus_rpc_url(context)?;
 
-        // Create random test file
         let random_file_path = create_random_test_file(&self.run_dir)?;
 
-        // Generate the test script
         let script = generate_test_script(
             &lotus_rpc_url,
             &warm_storage_addr,
@@ -111,7 +106,6 @@ impl Step for SynapseTestE2EStep {
             &sp_registry_addr,
         );
 
-        // Build and execute docker command
         execute_docker_test(&DockerTestParams {
             run_id,
             synapse_sdk_path: &synapse_sdk_path,
@@ -134,12 +128,35 @@ impl Step for SynapseTestE2EStep {
 
 /// Build and execute docker test container.
 fn execute_docker_test(params: &DockerTestParams) -> Result<(), Box<dyn Error>> {
-    let docker_args = build_docker_command(params)?;
-
-    let args_ref: Vec<&str> = docker_args.iter().map(|s| s.as_str()).collect();
+    let synapse_sdk_real_path = params
+        .synapse_sdk_path
+        .canonicalize()
+        .unwrap_or_else(|_| params.synapse_sdk_path.to_path_buf());
 
     info!("Executing test script in container...");
-    let output = docker_command(&args_ref)?;
+    let output = ContainerRunBuilder::builder_ephemeral(&format!(
+        "foc-{}-synapse-test",
+        params.run_id
+    ))
+    .env("CLIENT_PRIVATE_KEY", params.user_key)
+    .env("PRIVATE_KEY", params.user_key)
+    .env("RPC_URL", params.lotus_rpc_url)
+    .env("WARM_STORAGE_ADDRESS", params.warm_storage_addr)
+    .env("MULTICALL3_ADDRESS", params.multicall3_addr)
+    .env("USDFC_ADDRESS", params.usdfc_addr)
+    .env("SP_REGISTRY_ADDRESS", params.sp_registry_addr)
+    .env("CI", "true")
+    .volume(&synapse_sdk_real_path.display().to_string(), "/synapse-sdk")
+    .volume(
+        &params.random_file_path.display().to_string(),
+        "/tmp/random_test_file.txt",
+    )
+    .volume(
+        &params.builder_volumes_dir.join("cargo").display().to_string(),
+        "/root/.cargo",
+    )
+    .cmd(&["/bin/bash", "-c", params.script])
+    .run_raw()?;
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -150,69 +167,8 @@ fn execute_docker_test(params: &DockerTestParams) -> Result<(), Box<dyn Error>> 
         return Err("Synapse E2E Test failed".into());
     }
 
-    info!("✓ Synapse E2E Test completed successfully");
+    info!("Synapse E2E Test completed successfully");
     Ok(())
-}
-
-/// Build docker command arguments for test execution.
-fn build_docker_command(params: &DockerTestParams) -> Result<Vec<String>, Box<dyn Error>> {
-    let mut docker_args = vec![
-        "run".to_string(),
-        "--name".to_string(),
-        format!("foc-{}-synapse-test", params.run_id),
-        "--network".to_string(),
-        "host".to_string(),
-        "-u".to_string(),
-        "root".to_string(),
-    ];
-
-    // Add environment variables required by synapse-sdk scripts
-    // Note: example-storage-e2e.js uses env vars, not CLI flags
-    let env_vars = vec![
-        ("CLIENT_PRIVATE_KEY", params.user_key.to_string()),
-        ("PRIVATE_KEY", params.user_key.to_string()),
-        ("RPC_URL", params.lotus_rpc_url.to_string()),
-        ("WARM_STORAGE_ADDRESS", params.warm_storage_addr.to_string()),
-        ("MULTICALL3_ADDRESS", params.multicall3_addr.to_string()),
-        ("USDFC_ADDRESS", params.usdfc_addr.to_string()),
-        ("SP_REGISTRY_ADDRESS", params.sp_registry_addr.to_string()),
-        ("CI", "true".to_string()),
-    ];
-
-    for (key, value) in env_vars {
-        docker_args.push("-e".to_string());
-        docker_args.push(format!("{}={}", key, value));
-    }
-
-    // Mount synapse-sdk
-    let synapse_sdk_real_path = params
-        .synapse_sdk_path
-        .canonicalize()
-        .unwrap_or_else(|_| params.synapse_sdk_path.to_path_buf());
-    docker_args.push("-v".to_string());
-    docker_args.push(format!("{}:/synapse-sdk", synapse_sdk_real_path.display()));
-
-    // Mount random test file
-    docker_args.push("-v".to_string());
-    docker_args.push(format!(
-        "{}:/tmp/random_test_file.txt",
-        params.random_file_path.display()
-    ));
-
-    // Mount cargo cache
-    docker_args.push("-v".to_string());
-    docker_args.push(format!(
-        "{}:/root/.cargo",
-        params.builder_volumes_dir.join("cargo").display()
-    ));
-
-    // Add image and command
-    docker_args.push(BUILDER_DOCKER_IMAGE.to_string());
-    docker_args.push("/bin/bash".to_string());
-    docker_args.push("-c".to_string());
-    docker_args.push(params.script.to_string());
-
-    Ok(docker_args)
 }
 
 /// Load contract addresses from file.
@@ -246,7 +202,6 @@ fn extract_required_addresses(
         .clone();
     let user_key_prefixed = format!("0x{}", user_key);
 
-    // Extract contract addresses
     let warm_storage_addr = addresses["foc_contracts"]["filecoin_warm_storage_service_proxy"]
         .as_str()
         .ok_or("Warm storage address not found in contract_addresses.json")?
@@ -307,7 +262,6 @@ fn generate_test_script(
     lines.join("\n")
 }
 
-/// Steps to install and build the SDK inside the container.
 fn bootstrap_commands() -> Vec<String> {
     vec![
         "set -e".to_string(),
@@ -321,7 +275,6 @@ fn bootstrap_commands() -> Vec<String> {
     ]
 }
 
-/// CLI invocation for post-deploy setup.
 fn build_post_deploy_command(
     lotus_rpc_url: &str,
     warm_storage_addr: &str,
@@ -348,7 +301,6 @@ fn build_post_deploy_command(
     .join("\n")
 }
 
-/// Simple wait between setup and test to allow on-chain activation.
 fn wait_commands() -> Vec<String> {
     vec![
         format!(
@@ -360,8 +312,6 @@ fn wait_commands() -> Vec<String> {
     ]
 }
 
-/// CLI invocation for the storage E2E test.
-/// The script uses environment variables for configuration (set via Docker -e flags).
 fn build_storage_e2e_command() -> String {
     "echo \"Running storage E2E test...\"\n\
 node utils/example-storage-e2e.js /tmp/random_test_file.txt"

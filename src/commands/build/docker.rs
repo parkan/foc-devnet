@@ -3,9 +3,9 @@
 //! This module handles Docker image building and container execution for project builds.
 
 use crate::docker::{
-    bind_mount,
     build::build_docker_image,
-    core::{get_current_gid, get_current_uid, image_exists, is_podman},
+    builder::ContainerRunBuilder,
+    core::image_exists,
 };
 use crate::embedded_assets;
 use crate::paths::foc_devnet_docker_volumes_cache;
@@ -70,33 +70,24 @@ pub fn load_volume_map(
     Ok(volume_config.volumes)
 }
 
-/// Set up the Docker run arguments for the build container.
-pub fn setup_docker_run_args(
+/// Set up a ContainerRunBuilder for the build container.
+pub fn setup_build_builder(
     source_dir: &str,
     output_dir: &str,
     image_tag: &str,
     project: &Project,
-) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+) -> Result<ContainerRunBuilder, Box<dyn std::error::Error>> {
     let container_source_dir = "/workspace/source";
     let container_output_dir = "/workspace/output";
-
-    // Give each project a unique container name so they can build simultaneously
     let container_name = format!("{}-{}", crate::constants::BUILDER_CONTAINER, project);
 
-    let mut docker_run_args = vec![
-        "run".to_string(),
-        "--rm".to_string(),
-        "--name".to_string(),
-        container_name,
-        "-e".to_string(),
-        "HOME=/home/foc-user".to_string(),
-        "-v".to_string(),
-        bind_mount(source_dir, container_source_dir),
-        "-v".to_string(),
-        bind_mount(output_dir, container_output_dir),
-    ];
+    let mut builder = ContainerRunBuilder::run()
+        .rm()
+        .name(&container_name)
+        .volume(source_dir, container_source_dir)
+        .volume(output_dir, container_output_dir);
 
-    // Load and apply volume mappings for this image
+    // load and apply volume mappings for this image
     let volume_map = load_volume_map("builder")?;
     if !volume_map.is_empty() {
         let cache_dir = foc_devnet_docker_volumes_cache();
@@ -104,32 +95,14 @@ pub fn setup_docker_run_args(
 
         for (host_subdir, container_path) in volume_map {
             let host_path = image_volumes_dir.join(&host_subdir);
-            // Ensure the directory exists
             fs::create_dir_all(&host_path)?;
-            docker_run_args.push("-v".to_string());
-            docker_run_args.push(bind_mount(
-                &host_path.display().to_string(),
-                &container_path,
-            ));
+            builder = builder.volume(&host_path.display().to_string(), &container_path);
         }
     }
 
-    // With rootless podman, --userns=keep-id maps the host user into the
-    // container directly, avoiding UID remapping permission issues.
-    if is_podman() {
-        docker_run_args.push("--userns=keep-id".to_string());
-    } else {
-        let uid = get_current_uid()?;
-        let gid = get_current_gid()?;
-        docker_run_args.push("-u".to_string());
-        docker_run_args.push(format!("{}:{}", uid, gid));
-    }
+    builder = builder.image(image_tag);
 
-    docker_run_args.push(image_tag.to_string());
-    docker_run_args.push("/bin/bash".to_string());
-    docker_run_args.push("-c".to_string());
-
-    Ok(docker_run_args)
+    Ok(builder)
 }
 
 /// Set up the build script for the specific project.

@@ -9,7 +9,6 @@ pub const LOTUS_MINER_DOCKER_IMAGE: &str = "foc-lotus-miner";
 pub const BUILDER_DOCKER_IMAGE: &str = "foc-builder";
 pub const YUGABYTE_DOCKER_IMAGE: &str = "foc-yugabyte";
 pub const CURIO_DOCKER_IMAGE: &str = "foc-curio";
-pub const PORTAINER_DOCKER_IMAGE: &str = "foc-portainer";
 
 /// Docker container names (base - will be prefixed with foc-c-<RUN_ID>- in practice)
 pub const LOTUS_CONTAINER: &str = "foc-c-lotus";
@@ -17,13 +16,11 @@ pub const LOTUS_MINER_CONTAINER: &str = "foc-c-lotus-miner";
 pub const BUILDER_CONTAINER: &str = "foc-c-builder";
 pub const YUGABYTE_CONTAINER: &str = "foc-c-yugabyte";
 pub const CURIO_CONTAINER: &str = "foc-c-curio";
-pub const PORTAINER_CONTAINER: &str = "foc-c-portainer";
 
 /// Port numbers
 pub const LOTUS_RPC_PORT: u16 = 1234;
 pub const LOTUS_MINER_API_PORT: u16 = 2345;
 pub const YUGABYTE_PORT: u16 = 5433;
-pub const PORTAINER_PORT: u16 = 9009;
 
 /// Sleep durations (in seconds)
 pub const CONTAINER_INIT_WAIT_SECS: u64 = 5;

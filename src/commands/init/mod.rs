@@ -15,6 +15,7 @@ pub mod directories;
 pub mod keys;
 pub mod path_setup;
 pub mod repositories;
+pub mod selinux;
 
 use tracing::{info, warn};
 
@@ -157,6 +158,9 @@ pub fn init_environment(options: InitOptions) -> Result<(), Box<dyn std::error::
         // Build and cache Docker images
         crate::docker::build::build_and_cache_docker_images()?;
     }
+
+    // generate SELinux policy if enforcing
+    selinux::setup_selinux_policy()?;
 
     info!("✓ Initialization completed successfully");
     info!("You can now start the devnet with 'foc-devnet start'");
