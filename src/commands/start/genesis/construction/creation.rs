@@ -3,9 +3,9 @@
 //! This module handles creating the initial genesis file using lotus-seed.
 
 use crate::commands::start::genesis::constants;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::paths::{foc_devnet_bin, foc_devnet_docker_volumes_cache, foc_devnet_genesis};
 use std::fs;
-use std::process::Command;
 use tracing::info;
 
 /// Create the initial genesis file.
@@ -18,49 +18,38 @@ use tracing::info;
 pub fn create_genesis_file(run_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let genesis_dir = foc_devnet_genesis(run_id);
 
-    info!("📜 Creating genesis file...");
+    info!("Creating genesis file...");
 
     // Ensure genesis directory exists
     fs::create_dir_all(&genesis_dir)?;
 
-    // Get current timestamp in ISO 8601 format (RFC3339)
-    // lotus-seed expects format like: 2006-01-02T15:04:05Z
     let now = std::time::SystemTime::now();
     let datetime: chrono::DateTime<chrono::Utc> = now.into();
     let timestamp = datetime.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    // Run lotus-seed genesis new in builder container
     let bin_dir = foc_devnet_bin();
     let builder_volumes_dir =
         foc_devnet_docker_volumes_cache().join(crate::constants::BUILDER_CONTAINER);
 
-    // Build docker args with network environment variables
-    let mut docker_args = vec![
-        "run".to_string(),
-        "-u".to_string(),
-        "foc-user".to_string(),
-        "--name".to_string(),
-        format!("foc-{}-genesis-creation", run_id),
-    ];
-
-    // Add volume mounts and command
-    docker_args.extend(vec![
-        "-v".to_string(),
-        format!("{}:/opt/bin", bin_dir.display()),
-        "-v".to_string(),
-        format!("{}:/home/foc-user/.cargo", builder_volumes_dir.join("cargo").display()),
-        "-v".to_string(),
-        format!("{}:/genesis", genesis_dir.display()),
-        crate::constants::BUILDER_DOCKER_IMAGE.to_string(),
-        "/bin/bash".to_string(),
-        "-c".to_string(),
-        format!(
-            "/opt/bin/lotus-seed genesis new --network-name {} --timestamp {} /genesis/{} && chmod 666 /genesis/{}",
-            constants::NETWORK_NAME, timestamp, constants::GENESIS_FILE, constants::GENESIS_FILE
-        ),
-    ]);
-
-    let output = Command::new("docker").args(&docker_args).output()?;
+    let output = ContainerRunBuilder::run()
+        .name(&format!("foc-{}-genesis-creation", run_id))
+        .rm()
+        .volume(&bin_dir.display().to_string(), "/opt/bin")
+        .volume(
+            &builder_volumes_dir.join("cargo").display().to_string(),
+            "/home/foc-user/.cargo",
+        )
+        .volume(&genesis_dir.display().to_string(), "/genesis")
+        .image(crate::constants::BUILDER_DOCKER_IMAGE)
+        .cmd(&[
+            "/bin/bash",
+            "-c",
+            &format!(
+                "/opt/bin/lotus-seed genesis new --network-name {} --timestamp {} /genesis/{} && chmod 666 /genesis/{}",
+                constants::NETWORK_NAME, timestamp, constants::GENESIS_FILE, constants::GENESIS_FILE
+            ),
+        ])
+        .run_raw()?;
 
     if !output.status.success() {
         return Err(format!(
@@ -70,6 +59,6 @@ pub fn create_genesis_file(run_id: &str) -> Result<(), Box<dyn std::error::Error
         .into());
     }
 
-    info!("✓ Genesis file created successfully");
+    info!("Genesis file created successfully");
     Ok(())
 }

@@ -134,11 +134,6 @@ pub fn foc_devnet_multicall3_repo() -> PathBuf {
     foc_devnet_code().join("multicall3")
 }
 
-/// Returns the path to the "synapse-sdk" repository
-pub fn foc_devnet_synapse_sdk_repo() -> PathBuf {
-    foc_devnet_code().join("synapse-sdk")
-}
-
 /// Returns the path to the foc-devnet artifacts directory, e.g., ~/.foc-devnet/artifacts
 pub fn foc_devnet_artifacts() -> PathBuf {
     foc_devnet_home().join("artifacts")
@@ -162,6 +157,11 @@ pub fn foc_devnet_docker_volumes_run_specific_root() -> PathBuf {
 /// Returns the path to a specific run's volumes directory, e.g., ~/.foc-devnet/docker/volumes/run-specific/<run_id>
 pub fn foc_devnet_docker_volumes_run_specific(run_id: &str) -> PathBuf {
     foc_devnet_docker_volumes_run_specific_root().join(run_id)
+}
+
+/// Returns the path to the SELinux policy directory, e.g., ~/.foc-devnet/selinux
+pub fn foc_devnet_selinux() -> PathBuf {
+    foc_devnet_home().join("selinux")
 }
 
 /// Returns the path to the foc-devnet configuration, e.g., ~/.foc-devnet/config.toml

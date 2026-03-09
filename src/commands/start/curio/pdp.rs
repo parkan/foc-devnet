@@ -5,7 +5,7 @@
 use super::super::step::SetupContext;
 use super::constants::{CURIO_WEB_RPC_PORT, PDP_KEY_IMPORT_WAIT_SECS};
 use crate::commands::init::keys::KeyInfo;
-use crate::docker::command_logger::run_and_log_command;
+use crate::docker::builder::ContainerRunBuilder;
 use std::error::Error;
 use std::fs;
 use std::thread;
@@ -86,11 +86,8 @@ fn import_key_via_rpc(
 
     // Call via curl inside container
     let key = format!("curio_pdp_import_key_{}", container_name);
-    let output = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            container_name,
+    let output = ContainerRunBuilder::exec(container_name)
+        .cmd(&[
             "curl",
             "-s",
             "-X",
@@ -100,10 +97,8 @@ fn import_key_via_rpc(
             "-d",
             &payload,
             &format!("http://localhost:{}/api/webrpc/v0", CURIO_WEB_RPC_PORT),
-        ],
-        context,
-        &key,
-    )?;
+        ])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(

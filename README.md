@@ -2,33 +2,40 @@
 
 **Run a local Filecoin network with FOC (Filecoin Onchain Contracts) in minutes.**
 
-A developer-friendly tool for spinning up complete Filecoin test networks with smart contract support, deterministic key generation, and automated deployment—all running locally in Docker.
+A developer-friendly tool for spinning up complete Filecoin test networks with smart contract support, deterministic key generation, and automated deployment -- all running locally in rootless podman containers.
+
+This is a fork of [FilOzone/foc-devnet](https://github.com/FilOzone/foc-devnet) rewritten to use podman natively instead of Docker. All container operations go through a `ContainerRunBuilder` abstraction that produces correct rootless podman args by construction (`--userns=keep-id`, `:z` bind mount labels, proper `HOME`/`GIT_CONFIG` env vars, no `-u` flag). SELinux is supported via udica policy generation.
 
 ---
 
-## 🚀 Quick Start
-
-Get up and running in three simple steps:
+## Quick Start
 
 ### Prerequisites
 
-**Non-root user with Docker access**: `foc-devnet` must be run by a non-root user in the `docker` group.
+**Rootless podman**: no docker daemon or docker group needed.
 
 ```bash
-echo $(id -u); groups | grep 'docker'
+podman --version
 ```
 
-**Configure host.docker.internal**: Add this entry to `/etc/hosts` so SP URLs work from both host and containers:
+**Rust toolchain**: for building the CLI itself.
+
+```bash
+rustup --version   # or install from https://rustup.rs
+```
+
+**udica (Fedora/RHEL, SELinux enforcing)**: generates tailored SELinux policies for the containers. It depends on the system `selinux` python C extension, so it must come from the distro package manager -- pip/uv can't install it.
+
+```bash
+sudo dnf install -y udica
+```
+
+If SELinux is not enforcing (or you're on a non-SELinux distro), udica is not needed -- the init step will skip policy generation.
+
+**host.docker.internal**: required for SP-to-SP fetch. Add to `/etc/hosts`:
 
 ```bash
 echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts
-```
-
-This is required for SP-to-SP fetch. `foc-devnet start` will check for this and fail with instructions if not configured.
-
-For GitHub Actions, add this step before running foc-devnet:
-```yaml
-- run: echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts
 ```
 
 ### Step 1: Initialize
@@ -39,9 +46,9 @@ cargo run -- init
 
 This will:
 - Download required repositories (or use your local ones)
-- Build Docker images
+- Build container images
 - Generate deterministic cryptographic keys
-- Prepare the environment
+- Generate and install SELinux policy (if enforcing)
 
 **Using local repositories?** Specify them during init:
 
@@ -61,10 +68,7 @@ cargo run -- build lotus
 cargo run -- build curio
 ```
 
-This will:
-- Compile Lotus and Curio binaries inside Docker containers
-- Cache build artifacts for faster subsequent builds
-- You can run them in parallel as well for faster builds, if you have a powerful PC.
+Compiles Lotus and Curio binaries inside containers. Build artifacts are cached. Can run in parallel if you have the CPU/RAM for it.
 
 ### Step 3: Start the Network
 
@@ -76,121 +80,81 @@ This will:
 - Create the genesis block
 - Start Lotus daemon with FEVM enabled
 - Deploy FOC smart contracts (including MockUSDFC)
-- Start storage provider(s)
-- Launch [Portainer UI](https://docs.docksal.io/use-cases/portainer/) for container management
+- Start storage provider(s) with PDP support
 
-**If you have troubles**: Use `cargo run -- start`, removing parallelism during start, this may take longer.
-
-**That's it!** Your local Filecoin network is running.
+Use `cargo run -- start` (without `--parallel`) if you hit issues -- sequential startup is slower but easier to debug.
 
 ### Step 4: Use the Network
 
-See [examples/README.md](examples/README.md) for how you can easily consume network addresses, parameters, etc. and hook them into Synapse, etc. 
+All connection details (contract addresses, user keys, SP endpoints) are exported to `devnet-info.json`:
+
+```bash
+cat ~/.foc-devnet/state/latest/devnet-info.json
+```
+
+See [examples/README.md](examples/README.md) for more usage examples.
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-### 🪶 Lean Host Requirements
-Only needs three things on your machine:
-- **tar** archiver
-- **rustup/rustc** for building the CLI
-- **Docker** for containerized components
+**Lean host requirements**: only needs podman, Rust, and tar. Everything else (Lotus, Curio, all dependencies) is built inside containers.
 
-Everything else (Lotus, Curio, dependencies) is built inside Docker.
+**Configurable repositories**: depends on 4 repos, all overridable with local paths:
+- `filecoin-services` -- FOC smart contracts
+- `curio` -- storage provider
+- `lotus` -- Filecoin daemon
+- `synapse-sdk` -- PDP verification
 
-### ⚙️ Configurable Repositories
-Depends on 4 repositories, all configurable:
-- `filecoin-services` - FOC smart contracts
-- `curio` - Next-gen storage provider
-- `lotus` - Filecoin daemon
-- `synapse-sdk` - PDP verification
+**Deterministic setup**: pinned versions, fixed-seed key generation, consistent state persisted per run in `~/.foc-devnet/run/<run-id>/`.
 
-Each can be:
-- Auto-downloaded from GitHub (default)
-- Linked to your local git repository for development
+**Fully automated**: genesis creation, network init, contract deployment, SP registration -- no manual steps.
 
-### 🔒 Deterministic Setup
-- **Pinned versions**: All components use specific git tags/commits for reproducibility
-- **Deterministic keys**: Uses fixed seeds, generating the same keys on every setup
-- **Consistent state**: Each run preserves its context in `~/.foc-devnet/run/<run-id>/step_context.json`
+**Programmable**: contract addresses in JSON, step context for scripting, `FOC_DEVNET_BASEDIR` env var for custom base directory, `~/.foc-devnet/state/latest/` symlink to most recent run.
 
-### 🤖 Fully Automated
-From building Docker images to deploying contracts—everything is automated:
-- Genesis block creation
-- Network initialization
-- Smart contract deployment
-- Storage provider setup
+**Isolated networks**: podman user-defined networks separate nodes like production deployments.
 
-### 🧩 Modular Architecture
-Built with modular steps for easy extension and customization:
-- Add custom deployment steps
-- Configure multiple PDP service providers
-- Control "allowed" SP nodes via `~/.foc-devnet/config.toml` (see [Configuration System](README_ADVANCED.md#configuration-system))
-
-### 📜 Programmable
-Built for scripting and automation:
-- **Contract addresses**: `~/.foc-devnet/run/<run-id>/contract_addresses.json`
-- **Step context**: `~/.foc-devnet/run/<run-id>/step_context.json`
-- **Latest run symlink**: `~/.foc-devnet/state/latest/` → points to most recent run
-- **Custom base directory**: Set `FOC_DEVNET_BASEDIR` env var to override default `~/.foc-devnet` location (see [Environment Variables](README_ADVANCED.md#environment-variables))
-- Write scripts for testing, demos, CI/CD pipelines, etc.
-
-### 🌐 Isolated Networks
-Uses Docker user-defined networks to mimic real-world node separation—just like production deployments.
-
-### 💰 Built-in Token Contracts
-Includes ready-to-use test contracts:
-- **MockUSDFC** - ERC-20 test token
-- **Multicall3** - Batch contract calls
-
-### 🖥️ Portainer UI
-Bundled with Portainer for browser-based Docker management—no terminal wizardry required.
+**Built-in contracts**: MockUSDFC (ERC-20 test token), Multicall3 (batch calls).
 
 ---
 
-## 📋 System Requirements
+## System Requirements
 
 | Requirement | Details |
 |-------------|---------|
 | **Rust** | 1.70+ ([rustup.rs](https://rustup.rs)) |
-| **Docker** | Desktop (macOS) or CE (Linux) |
-| **tar** | Archive utility (usually pre-installed) |
-| **Disk Space** | ~20GB for images and blockchain data |
-| **Architecture** | Supports both x86 (Intel) and ARM64 (Apple Silicon, AWS Graviton, etc.) architectures. The system automatically selects the appropriate binaries based on your architecture. |
+| **Podman** | rootless mode, 4.0+ |
+| **udica** | for SELinux policy generation (Fedora/RHEL only) |
+| **tar** | archive utility (usually pre-installed) |
+| **Disk Space** | ~20GB for images and chain data |
 
 ---
 
-## 🛠️ Need More?
+## More Documentation
 
-See **[README_ADVANCED.md](README_ADVANCED.md)** for comprehensive documentation on:
-- **All commands reference** (init, build, start, stop, status, version)
-- **Configuration system** (config.toml structure, parameters, editing)
-- **Complete directory structure** (what's stored where and why)
-- **Resetting and cleanup** (manual cleanup, disk management)
-- **Run ID and Step Context** (isolation mechanism, state sharing)
-- **Docker and networking** (container architecture, network topology, Portainer debugging)
-- **Repository management** (using local repos, sharing configurations)
-- **Command flags** (detailed explanations of all flags and when to use them)
-- **Lifecycle overview** (full startup sequence, step implementation)
-- **Service Provider examples** (1 SP with 0 authorized, 3 SPs with top 2 authorized, etc.)
-- **Troubleshooting guides** (port conflicts, build failures, network issues)
-- **Additional user actions** (custom genesis, Lotus API access, contract interaction)
+See **[README_ADVANCED.md](README_ADVANCED.md)** for:
+- All commands reference (init, build, start, stop, status, version)
+- Configuration system (config.toml structure, parameters)
+- Directory structure
+- Container architecture and network topology
+- Repository management and local repo linking
+- Service provider configuration
+- Troubleshooting
 
 ---
 
-## 🚶 Examples
+## Examples
 
 See [examples/README.md](examples/README.md).
 
 ---
 
-## 📝 License
+## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License -- see [LICENSE](LICENSE) file for details.
 
 ---
 
-## 💬 Support
+## Support
 
 - **Issues**: [GitHub Issues](https://github.com/FilOzone/foc-devnet/issues)

@@ -8,6 +8,7 @@
 //! - Handle cases where the system is not running
 
 use chrono::{DateTime, Utc};
+use crate::docker::builder::ContainerRunBuilder;
 use std::process::Command;
 use tracing::{info, warn};
 
@@ -29,15 +30,13 @@ use crate::docker::status::{get_container_start_time, get_running_foc_containers
 /// }
 /// ```
 fn get_lotus_block_height() -> Option<u64> {
-    let output = Command::new("docker")
-        .args([
-            "exec",
-            crate::constants::LOTUS_CONTAINER,
+    let output = ContainerRunBuilder::exec(crate::constants::LOTUS_CONTAINER)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/lotus",
             "chain",
             "list",
         ])
-        .output()
+        .run_raw()
         .ok()?;
 
     if !output.status.success() {

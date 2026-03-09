@@ -163,13 +163,6 @@ pub struct Config {
     /// See [`Location`] for available options.
     pub multicall3: Location,
 
-    /// Location specification for the synapse-sdk repository.
-    ///
-    /// Defines how to obtain the synapse-sdk code, which provides
-    /// SDK functionality for Filecoin integration.
-    /// See [`Location`] for available options.
-    pub synapse_sdk: Location,
-
     /// URL to download Yugabyte database tarball.
     ///
     /// This is the direct link to the Yugabyte tarball required for running curio.
@@ -233,13 +226,9 @@ impl Default for Config {
                 url: "https://github.com/mds1/multicall3.git".to_string(),
                 tag: "v3.1.0".to_string(),
             },
-            synapse_sdk: Location::GitCommit {
-                url: "https://github.com/FilOzone/synapse-sdk.git".to_string(),
-                commit: "3bc6a7fd2d0b66119163c6759241a6ff74ac03e1".to_string(),
-            },
             yugabyte_download_url: Self::get_default_yugabyte_url(),
             approved_pdp_sp_count: 2,
-            endorsed_pdp_sp_count: 1,
+            endorsed_pdp_sp_count: 0,
             active_pdp_sp_count: 2,
         }
     }

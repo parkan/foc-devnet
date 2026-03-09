@@ -71,6 +71,11 @@ impl Step for EndorsementStep {
     fn pre_execute(&self, context: &SetupContext) -> Result<(), Box<dyn Error>> {
         info!("Pre-checking {}", self.name());
 
+        if self.endorsed_sp_count == 0 {
+            info!("No providers to endorse (endorsed_pdp_sp_count = 0), skipping pre-check");
+            return Ok(());
+        }
+
         Self::check_lotus_running(context)?;
         info!("Lotus is running");
 

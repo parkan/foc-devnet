@@ -3,6 +3,7 @@
 //! This module handles downloading and caching Filecoin proof parameters
 //! required for lotus operations.
 
+use crate::docker::builder::ContainerRunBuilder;
 use crate::paths::{
     foc_devnet_bin, foc_devnet_docker_volumes, foc_devnet_proof_parameters,
     CONTAINER_FILECOIN_PROOF_PARAMS_PATH,
@@ -10,7 +11,7 @@ use crate::paths::{
 use crate::utils::retry::{retry_with_fixed_delay, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY_SECS};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -131,40 +132,26 @@ fn download_via_lotus_fetch_params(
                     .duration_since(std::time::UNIX_EPOCH)?
                     .as_secs()
             );
-            let child = Command::new("docker")
-                .args([
-                    "run",
-                    "--name",
-                    &container_name,
-                    "-e",
-                    &format!(
-                        "FIL_PROOFS_PARAMETER_CACHE={}",
-                        CONTAINER_FILECOIN_PROOF_PARAMS_PATH
-                    ),
-                    "-v",
-                    &format!("{}:/output", bin_dir.display()),
-                    "-v",
-                    &format!(
-                        "{}:/home/foc-user/.cargo",
-                        builder_volumes_dir.join("cargo").display()
-                    ),
-                    "-v",
-                    &format!(
-                        "{}:{}",
-                        params_dir.display(),
-                        CONTAINER_FILECOIN_PROOF_PARAMS_PATH
-                    ),
-                    crate::constants::BUILDER_DOCKER_IMAGE,
-                    "/bin/bash",
-                    "-c",
-                    &format!(
-                        "/output/lotus fetch-params {}",
-                        super::constants::PROOF_PARAMS_SECTOR_SIZE
-                    ),
-                ])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()?;
+            let cmd_str = format!(
+                "/output/lotus fetch-params {}",
+                super::constants::PROOF_PARAMS_SECTOR_SIZE
+            );
+
+            let child = ContainerRunBuilder::run()
+                .name(&container_name)
+                .env("FIL_PROOFS_PARAMETER_CACHE", CONTAINER_FILECOIN_PROOF_PARAMS_PATH)
+                .volume(&bin_dir.display().to_string(), "/output")
+                .volume(
+                    &builder_volumes_dir.join("cargo").display().to_string(),
+                    "/home/foc-user/.cargo",
+                )
+                .volume(
+                    &params_dir.display().to_string(),
+                    CONTAINER_FILECOIN_PROOF_PARAMS_PATH,
+                )
+                .image(crate::constants::BUILDER_DOCKER_IMAGE)
+                .cmd(&["/bin/bash", "-c", &cmd_str])
+                .spawn_quiet()?;
 
             let output = child.wait_with_output()?;
 

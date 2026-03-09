@@ -8,7 +8,7 @@ use super::container_management::{
     check_existing_container, start_container, wait_for_container_init,
 };
 use super::prerequisites::check_genesis_and_params;
-use super::setup::{build_docker_command, setup_directories};
+use super::setup::{build_lotus_builder, setup_directories};
 use super::verification::{verify_api_connectivity, verify_ports, wait_for_api_file};
 use std::error::Error;
 use std::path::PathBuf;
@@ -64,8 +64,8 @@ impl Step for LotusStep {
         check_existing_container(context)?;
 
         setup_directories(&self.volumes_dir)?;
-        let docker_args = build_docker_command(&self.volumes_dir, context)?;
-        start_container(docker_args, context)?;
+        let builder = build_lotus_builder(&self.volumes_dir, context)?;
+        start_container(builder, context)?;
         wait_for_container_init(context)?;
         wait_for_api_file(&self.volumes_dir)?;
 

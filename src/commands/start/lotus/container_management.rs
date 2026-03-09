@@ -1,9 +1,7 @@
 //! Container management for Lotus daemon.
-//!
-//! This module contains functions for managing the Lotus daemon Docker container,
-//! including starting, stopping, and checking container status.
 
 use super::super::step::SetupContext;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::docker::command_logger::run_and_log_command_strings;
 use crate::docker::containers::lotus_container_name;
 use crate::docker::{container_exists, container_is_running, stop_and_remove_container};
@@ -12,13 +10,9 @@ use std::thread;
 use std::time::Duration;
 use tracing::info;
 
-// Timing constants
 const CONTAINER_INIT_WAIT_SECS: u64 = 10;
-
-// Log constants
 const LOG_TAIL_LINES: &str = "50";
 
-/// Get the Lotus container name from context
 fn get_container_name(context: &SetupContext) -> Result<String, Box<dyn Error>> {
     let run_id = context.run_id();
     Ok(lotus_container_name(run_id))
@@ -28,29 +22,27 @@ fn get_container_name(context: &SetupContext) -> Result<String, Box<dyn Error>> 
 pub fn check_existing_container(context: &SetupContext) -> Result<(), Box<dyn Error>> {
     let container_name = get_container_name(context)?;
 
-    // Check if any existing lotus container is running
     if container_exists(&container_name)? {
         if container_is_running(&container_name)? {
             info!("Container '{}' is already running", container_name);
-            stop_and_remove_container(&container_name)?;
         } else {
             info!("Container '{}' exists but is not running", container_name);
-            stop_and_remove_container(&container_name)?;
         }
+        stop_and_remove_container(&container_name)?;
     }
     Ok(())
 }
 
-/// Start the Lotus daemon container
+/// Start the Lotus daemon container from a builder
 pub fn start_container(
-    docker_args: Vec<String>,
+    builder: ContainerRunBuilder,
     context: &SetupContext,
 ) -> Result<(), Box<dyn Error>> {
     let container_name = get_container_name(context)?;
 
     info!("Starting Lotus daemon container '{}'...", container_name);
     let key = format!("lotus_container_start_{}", container_name);
-    let output = run_and_log_command_strings("docker", &docker_args, context, &key)?;
+    let output = builder.run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(
@@ -72,13 +64,10 @@ pub fn start_container(
 pub fn wait_for_container_init(context: &SetupContext) -> Result<(), Box<dyn Error>> {
     let container_name = get_container_name(context)?;
 
-    // Wait for container to initialize
     info!("Waiting for Lotus daemon to start...");
     thread::sleep(Duration::from_secs(CONTAINER_INIT_WAIT_SECS));
 
-    // Verify container is running
     if !container_is_running(&container_name)? {
-        // Check logs for errors
         let key = format!("lotus_container_logs_{}", container_name);
         let logs_output = run_and_log_command_strings(
             "docker",

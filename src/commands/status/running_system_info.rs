@@ -3,6 +3,7 @@
 //! This module displays detailed information about the currently running
 //! system, including block height, service ports, and file locations.
 
+use crate::docker::builder::ContainerRunBuilder;
 use crate::paths::{contract_addresses_file, foc_metadata_file, step_context_file};
 use crate::run_id::load_current_run_id;
 use std::process::Command;
@@ -49,16 +50,14 @@ pub fn print_running_system_info() -> Result<(), Box<dyn std::error::Error>> {
 fn get_lotus_block_height(run_id: &str) -> Option<u64> {
     let container_name = format!("foc-{}-lotus", run_id);
 
-    let output = Command::new("docker")
-        .args([
-            "exec",
-            &container_name,
+    let output = ContainerRunBuilder::exec(&container_name)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/lotus",
             "chain",
             "list",
             "--count=1",
         ])
-        .output()
+        .run_raw()
         .ok()?;
 
     if !output.status.success() {
