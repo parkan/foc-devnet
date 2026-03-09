@@ -307,7 +307,6 @@ pub trait Step: Send + Sync {
 /// * `run_dir` - Directory for storing run-specific data and logs
 /// * `port_start` - Starting port for the contiguous port range
 /// * `port_count` - Number of ports in the range
-/// * `portainer_port` - Optional port already allocated for Portainer
 ///
 /// Configuration for step execution
 pub struct StepExecutionConfig {
@@ -315,7 +314,6 @@ pub struct StepExecutionConfig {
     pub run_dir: PathBuf,
     pub port_start: u16,
     pub port_count: u16,
-    pub portainer_port: Option<u16>,
     pub active_pdp_sp_count: usize,
     pub approved_pdp_sp_count: usize,
     pub endorsed_pdp_sp_count: usize,
@@ -326,7 +324,7 @@ pub fn execute_steps(
     config: StepExecutionConfig,
 ) -> Result<SetupContext, Box<dyn Error>> {
     // Create port allocator and verify all ports are available
-    let mut port_allocator = PortAllocator::new(config.port_start, config.port_count)?;
+    let port_allocator = PortAllocator::new(config.port_start, config.port_count)?;
 
     info!(
         "Port range check: {}-{} ({} ports)",
@@ -335,28 +333,12 @@ pub fn execute_steps(
         config.port_count
     );
 
-    // If Portainer is using a port in our range, we don't want to fail the availability check
-    // because Portainer is already running (started by us).
-    // So we verify all ports EXCEPT the portainer port if it's in range.
     for port in config.port_start..(config.port_start + config.port_count) {
-        if let Some(p_port) = config.portainer_port {
-            if port == p_port {
-                continue;
-            }
-        }
         if !crate::docker::core::is_port_available(port) {
-            // Check port availability directly to ensure no conflicts before starting containers
             return Err(format!("Port {} is already in use", port).into());
         }
     }
     info!("All ports in range are available");
-
-    // If Portainer port was provided, mark it as allocated in our allocator
-    if let Some(p_port) = config.portainer_port {
-        if p_port >= config.port_start && p_port < (config.port_start + config.port_count) {
-            port_allocator.mark_allocated(p_port)?;
-        }
-    }
 
     let context =
         SetupContext::with_run_id_and_ports(config.run_id, config.run_dir, port_allocator);
@@ -411,7 +393,6 @@ pub fn execute_steps(
 /// * `run_dir` - Directory for storing run-specific data and logs
 /// * `port_start` - Starting port for the contiguous port range
 /// * `port_count` - Number of ports in the range
-/// * `portainer_port` - Optional port already allocated for Portainer
 ///
 /// # Returns
 ///
@@ -421,7 +402,7 @@ pub fn execute_steps_parallel(
     config: StepExecutionConfig,
 ) -> Result<SetupContext, Box<dyn Error>> {
     // Create port allocator and verify all ports are available
-    let mut port_allocator = PortAllocator::new(config.port_start, config.port_count)?;
+    let port_allocator = PortAllocator::new(config.port_start, config.port_count)?;
 
     info!(
         "Port range check: {}-{} ({} ports)",
@@ -430,24 +411,12 @@ pub fn execute_steps_parallel(
         config.port_count
     );
 
-    // If Portainer is using a port in our range, we don't want to fail the availability check
-    // because Portainer is already running (started by us).
     for port in config.port_start..(config.port_start + config.port_count) {
-        if let Some(p_port) = config.portainer_port {
-            if port == p_port {
-                continue;
-            }
-        }
         if !crate::docker::core::is_port_available(port) {
             return Err(format!("Port {} is already in use", port).into());
         }
     }
-    info!("✓ All ports in range are available");
-
-    // Mark portainer port as allocated if provided
-    if let Some(port) = config.portainer_port {
-        port_allocator.mark_allocated(port)?;
-    }
+    info!("All ports in range are available");
 
     let context = Arc::new(SetupContext::with_run_id_and_ports(
         config.run_id,

@@ -9,7 +9,7 @@ use tracing::info;
 
 use super::constants::{MINER_API_CHECK_DELAY_SECS, PORT_WAIT_TIMEOUT_SECS};
 use crate::commands::start::step::SetupContext;
-use crate::docker::command_logger::run_and_log_command;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::docker::containers::{lotus_container_name, lotus_miner_container_name};
 use crate::docker::wait_for_port;
 use crate::utils::retry::{retry_with_fixed_delay, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY_SECS};
@@ -36,17 +36,12 @@ pub fn check_miner_api(context: &SetupContext) -> Result<(), Box<dyn Error>> {
 
     // Try to execute a simple lotus-miner command via docker exec
     let key = format!("lotus_miner_api_check_{}", container_name);
-    let output = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            &container_name,
+    let output = ContainerRunBuilder::exec(&container_name)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/lotus-miner",
             "version",
-        ],
-        context,
-        &key,
-    )?;
+        ])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(
@@ -65,19 +60,14 @@ pub fn check_tipset_generation(context: &SetupContext) -> Result<(), Box<dyn Err
 
     // Get initial chain height
     let key = format!("lotus_miner_chain_height_check_1_{}", lotus_name);
-    let output1 = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            &lotus_name,
+    let output1 = ContainerRunBuilder::exec(&lotus_name)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/lotus",
             "chain",
             "list",
             "--count=1",
-        ],
-        context,
-        &key,
-    )?;
+        ])
+        .run_logged(context, &key)?;
 
     if !output1.status.success() {
         return Err("Failed to get initial chain height".into());
@@ -90,19 +80,14 @@ pub fn check_tipset_generation(context: &SetupContext) -> Result<(), Box<dyn Err
         || {
             // Get new chain height
             let key = format!("lotus_miner_chain_height_check_{}", lotus_name);
-            let output2 = run_and_log_command(
-                "docker",
-                &[
-                    "exec",
-                    &lotus_name,
+            let output2 = ContainerRunBuilder::exec(&lotus_name)
+                .cmd(&[
                     "/usr/local/bin/lotus-bins/lotus",
                     "chain",
                     "list",
                     "--count=1",
-                ],
-                context,
-                &key,
-            )?;
+                ])
+                .run_logged(context, &key)?;
 
             if !output2.status.success() {
                 return Err("Failed to get new chain height".into());

@@ -22,9 +22,6 @@ EnableCommP = true
 EnableMoveStorage = true
 EnablePDP = true
 EnableParkPiece = true
-
-[StorageMarket.IPNI]
-Disable = true
 "#;
 
 /// Wait times (in seconds)

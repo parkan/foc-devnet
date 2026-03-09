@@ -228,7 +228,7 @@ impl Default for Config {
             },
             yugabyte_download_url: Self::get_default_yugabyte_url(),
             approved_pdp_sp_count: 2,
-            endorsed_pdp_sp_count: 1,
+            endorsed_pdp_sp_count: 0,
             active_pdp_sp_count: 2,
         }
     }

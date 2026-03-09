@@ -4,8 +4,7 @@ use tracing::info;
 
 use super::constants::*;
 use crate::commands::start::step::SetupContext;
-use crate::constants::BUILDER_DOCKER_IMAGE;
-use crate::docker::command_logger::run_and_log_command_strings;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::utils::retry::{retry_with_fixed_delay, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY_SECS};
 use std::error::Error;
 
@@ -42,22 +41,14 @@ pub fn register_single_provider(
 
     info!("Registering {} in ServiceProviderRegistry...", label);
 
-    // Get private key for this PDP SP
     let pdp_sp_private_key =
         crate::commands::start::foc_deployer::get_private_key(params.pdp_sp_address, "")?;
 
-    // Build capability keys array
     let cap_keys = build_capability_keys();
-
-    // Build capability values array with the specific service URL
     let cap_values =
         build_capability_values_with_url(params.mock_usdfc_address, params.service_url)?;
-
-    // Calculate registration fee in wei
     let registration_fee_wei = format!("{}000000000000000000", REGISTRATION_FEE_FIL);
 
-    // Execute registerProvider transaction with high gas limit for FEVM
-    // FEVM consistently requires much higher gas than Ethereum, so we use a large fixed limit
     let cast_cmd = format!(
         r#"cast send {} \
         "registerProvider(address,string,string,uint8,string[],bytes[])" \
@@ -82,22 +73,10 @@ pub fn register_single_provider(
         pdp_sp_private_key,
     );
 
-    let args: Vec<String> = vec![
-        "run".to_string(),
-        "--name".to_string(),
-        container_name,
-        "-u".to_string(),
-        "foc-user".to_string(),
-        "--network".to_string(),
-        "host".to_string(),
-        BUILDER_DOCKER_IMAGE.to_string(),
-        "bash".to_string(),
-        "-c".to_string(),
-        cast_cmd,
-    ];
-
     let key = format!("pdp_register_provider_sp{}", params.sp_index);
-    let output = run_and_log_command_strings("docker", &args, context, &key)?;
+    let output = ContainerRunBuilder::builder_ephemeral(&container_name)
+        .cmd(&["bash", "-c", &cast_cmd])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -105,18 +84,14 @@ pub fn register_single_provider(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // println!("Registration output:\n{}", stdout);
 
-    // Check if transaction was successful by looking for "status" field
     if stdout.contains("status               0") || stdout.contains("status               (failed)")
     {
         return Err("Provider registration transaction failed (status 0). Check transaction logs for details.".into());
     }
 
-    // Wait for transaction confirmation
     wait_for_confirmation();
 
-    // Query provider ID
     let provider_id = query_provider_id(
         params.run_id,
         params.registry_address,
@@ -125,7 +100,7 @@ pub fn register_single_provider(
         context,
     )?;
 
-    info!("✓ {} Provider ID: {}", label, provider_id);
+    info!("{} Provider ID: {}", label, provider_id);
     Ok(provider_id)
 }
 
@@ -139,38 +114,28 @@ pub fn add_to_approved_list(
         params.provider_id
     );
 
-    // Get private key for DEPLOYER_FOC
     let deployer_foc_private_key =
         crate::commands::start::foc_deployer::get_private_key(params.deployer_foc_address, "")?;
 
-    // Use high gas limit for FEVM (cast send doesn't support gas-estimate-multiplier)
     let provider_id_str = params.provider_id.to_string();
     let container_name = format!("foc-{}-pdp-approve-{}", params.run_id, params.provider_id);
 
-    let args: Vec<String> = vec![
-        "run".to_string(),
-        "--name".to_string(),
-        container_name,
-        "-u".to_string(),
-        "foc-user".to_string(),
-        "--network".to_string(),
-        "host".to_string(),
-        BUILDER_DOCKER_IMAGE.to_string(),
-        "cast".to_string(),
-        "send".to_string(),
-        params.warm_storage_address.to_string(),
-        "addApprovedProvider(uint256)".to_string(),
-        provider_id_str,
-        "--rpc-url".to_string(),
-        params.lotus_rpc_url.to_string(),
-        "--private-key".to_string(),
-        deployer_foc_private_key,
-        "--gas-limit".to_string(),
-        "10000000000".to_string(),
-    ];
-
     let key = format!("pdp_add_approved_provider_{}", params.provider_id);
-    let output = run_and_log_command_strings("docker", &args, context, &key)?;
+    let output = ContainerRunBuilder::builder_ephemeral(&container_name)
+        .cmd(&[
+            "cast",
+            "send",
+            params.warm_storage_address,
+            "addApprovedProvider(uint256)",
+            &provider_id_str,
+            "--rpc-url",
+            params.lotus_rpc_url,
+            "--private-key",
+            &deployer_foc_private_key,
+            "--gas-limit",
+            "10000000000",
+        ])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -179,14 +144,13 @@ pub fn add_to_approved_list(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Check if transaction was successful
     if stdout.contains("status               0") || stdout.contains("status               (failed)")
     {
         info!("Transaction output:\n{}", stdout);
         return Err("Add approved provider transaction failed (status 0). Check transaction logs for details.".into());
     }
 
-    info!("✓ Provider added to approved list");
+    info!("Provider added to approved list");
     wait_for_confirmation();
 
     Ok(())
@@ -202,23 +166,16 @@ fn build_capability_values_with_url(
     mock_usdfc_address: &str,
     service_url: &str,
 ) -> Result<String, Box<dyn Error>> {
-    // For the bytes[] parameter in Solidity, we need to pass raw bytes for each value
-    // Cast expects array format: [0x...,0x...,0x...] (no quotes, no spaces)
-
-    // Encode each value using big-endian minimal encoding (like BigEndian.sol does)
     let service_url_bytes = hex::encode(service_url.as_bytes());
     let location_bytes = hex::encode(LOCATION.as_bytes());
 
-    // For uint256 values, encode as minimal big-endian bytes (no leading zeros)
     let min_piece_size_bytes = encode_uint_minimal(MIN_PIECE_SIZE_BYTES);
     let max_piece_size_bytes = encode_uint_minimal(MAX_PIECE_SIZE_BYTES);
     let storage_price_bytes = encode_uint_minimal(STORAGE_PRICE_PER_TIB_PER_DAY);
     let min_proving_period_bytes = encode_uint_minimal(MIN_PROVING_PERIOD_EPOCHS);
 
-    // Payment token address - just the address bytes (20 bytes)
-    let payment_token_bytes = &mock_usdfc_address[2..]; // Remove 0x prefix, will add back
+    let payment_token_bytes = &mock_usdfc_address[2..];
 
-    // Build the array - cast expects format: [0x...,0x...,0x...] (no quotes, no spaces)
     let values = format!(
         "[0x{},0x{},0x{},0x{},0x{},0x{},0x{}]",
         service_url_bytes,
@@ -238,16 +195,12 @@ fn encode_uint_minimal(value: u64) -> String {
         return "00".to_string();
     }
 
-    // Convert to big-endian bytes
     let bytes = value.to_be_bytes();
-
-    // Skip leading zeros
     let first_non_zero = bytes
         .iter()
         .position(|&b| b != 0)
         .unwrap_or(bytes.len() - 1);
 
-    // Encode remaining bytes as hex
     hex::encode(&bytes[first_non_zero..])
 }
 
@@ -261,26 +214,18 @@ fn query_provider_id(
 ) -> Result<u64, Box<dyn Error>> {
     let container_name = format!("foc-{}-pdp-query-provider-{}", run_id, pdp_sp_eth_address);
 
-    let args: Vec<String> = vec![
-        "run".to_string(),
-        "--name".to_string(),
-        container_name,
-        "-u".to_string(),
-        "foc-user".to_string(),
-        "--network".to_string(),
-        "host".to_string(),
-        BUILDER_DOCKER_IMAGE.to_string(),
-        "cast".to_string(),
-        "call".to_string(),
-        registry_address.to_string(),
-        "getProviderIdByAddress(address)(uint256)".to_string(),
-        pdp_sp_eth_address.to_string(),
-        "--rpc-url".to_string(),
-        lotus_rpc_url.to_string(),
-    ];
-
     let key = format!("pdp_query_provider_id_{}", pdp_sp_eth_address);
-    let output = run_and_log_command_strings("docker", &args, context, &key)?;
+    let output = ContainerRunBuilder::builder_ephemeral(&container_name)
+        .cmd(&[
+            "cast",
+            "call",
+            registry_address,
+            "getProviderIdByAddress(address)(uint256)",
+            pdp_sp_eth_address,
+            "--rpc-url",
+            lotus_rpc_url,
+        ])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -309,8 +254,6 @@ fn wait_for_confirmation() {
 }
 
 /// Verify provider count on-chain
-///
-/// Returns the total number of registered providers.
 pub fn verify_provider_count(
     run_id: &str,
     registry_address: &str,
@@ -321,25 +264,17 @@ pub fn verify_provider_count(
         || {
             let container_name = format!("foc-{}-pdp-verify-count", run_id);
 
-            let args: Vec<String> = vec![
-                "run".to_string(),
-                "--name".to_string(),
-                container_name,
-                "-u".to_string(),
-                "foc-user".to_string(),
-                "--network".to_string(),
-                "host".to_string(),
-                BUILDER_DOCKER_IMAGE.to_string(),
-                "cast".to_string(),
-                "call".to_string(),
-                registry_address.to_string(),
-                "getProviderCount()(uint256)".to_string(),
-                "--rpc-url".to_string(),
-                lotus_rpc_url.to_string(),
-            ];
-
             let key = "pdp_verify_provider_count".to_string();
-            let output = run_and_log_command_strings("docker", &args, context, &key)?;
+            let output = ContainerRunBuilder::builder_ephemeral(&container_name)
+                .cmd(&[
+                    "cast",
+                    "call",
+                    registry_address,
+                    "getProviderCount()(uint256)",
+                    "--rpc-url",
+                    lotus_rpc_url,
+                ])
+                .run_logged(context, &key)?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -358,8 +293,6 @@ pub fn verify_provider_count(
 }
 
 /// Verify provider ID by address on-chain
-///
-/// Returns the provider ID for the given address.
 pub fn verify_provider_id_by_address(
     run_id: &str,
     registry_address: &str,
@@ -371,26 +304,18 @@ pub fn verify_provider_id_by_address(
         || {
             let container_name = format!("foc-{}-pdp-verify-id-{}", run_id, provider_address);
 
-            let args: Vec<String> = vec![
-                "run".to_string(),
-                "--name".to_string(),
-                container_name,
-                "-u".to_string(),
-                "foc-user".to_string(),
-                "--network".to_string(),
-                "host".to_string(),
-                BUILDER_DOCKER_IMAGE.to_string(),
-                "cast".to_string(),
-                "call".to_string(),
-                registry_address.to_string(),
-                "getProviderIdByAddress(address)(uint256)".to_string(),
-                provider_address.to_string(),
-                "--rpc-url".to_string(),
-                lotus_rpc_url.to_string(),
-            ];
-
             let key = format!("pdp_verify_provider_id_{}", provider_address);
-            let output = run_and_log_command_strings("docker", &args, context, &key)?;
+            let output = ContainerRunBuilder::builder_ephemeral(&container_name)
+                .cmd(&[
+                    "cast",
+                    "call",
+                    registry_address,
+                    "getProviderIdByAddress(address)(uint256)",
+                    provider_address,
+                    "--rpc-url",
+                    lotus_rpc_url,
+                ])
+                .run_logged(context, &key)?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -409,9 +334,6 @@ pub fn verify_provider_id_by_address(
 }
 
 /// Verify provider is in approved list using StateView contract
-///
-/// Uses FilecoinWarmStorageServiceStateView for read-only queries.
-/// Returns true if the provider is approved.
 pub fn verify_approved_provider(
     run_id: &str,
     state_view_address: &str,
@@ -421,29 +343,21 @@ pub fn verify_approved_provider(
 ) -> Result<bool, Box<dyn Error>> {
     retry_with_fixed_delay(
         || {
-            // Use isProviderApproved function on StateView contract
             let provider_id_str = provider_id.to_string();
             let container_name = format!("foc-{}-pdp-verify-approved-{}", run_id, provider_id);
-            let args: Vec<String> = vec![
-                "run".to_string(),
-                "--name".to_string(),
-                container_name,
-                "-u".to_string(),
-                "foc-user".to_string(),
-                "--network".to_string(),
-                "host".to_string(),
-                BUILDER_DOCKER_IMAGE.to_string(),
-                "cast".to_string(),
-                "call".to_string(),
-                state_view_address.to_string(),
-                "isProviderApproved(uint256)(bool)".to_string(),
-                provider_id_str,
-                "--rpc-url".to_string(),
-                lotus_rpc_url.to_string(),
-            ];
 
             let key = format!("pdp_verify_approved_provider_{}", provider_id);
-            let output = run_and_log_command_strings("docker", &args, context, &key)?;
+            let output = ContainerRunBuilder::builder_ephemeral(&container_name)
+                .cmd(&[
+                    "cast",
+                    "call",
+                    state_view_address,
+                    "isProviderApproved(uint256)(bool)",
+                    &provider_id_str,
+                    "--rpc-url",
+                    lotus_rpc_url,
+                ])
+                .run_logged(context, &key)?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);

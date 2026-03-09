@@ -35,7 +35,7 @@ use yugabyte::YugabyteStep;
 use crate::commands::start::usdfc_funding::USDFCFundingStep;
 use crate::config::Config;
 use crate::docker::core::{container_is_running, remove_container, stop_container};
-use crate::docker::{create_all_networks, start_portainer};
+use crate::docker::create_all_networks;
 use crate::paths::{foc_devnet_config, foc_devnet_run_dir};
 use crate::run_id::{create_latest_symlink, save_current_run_id};
 use crate::version_info::write_version_file;
@@ -44,65 +44,31 @@ use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
-/// Check that host.docker.internal resolves to 127.0.0.1.
-///
-/// This is required for SP-to-SP fetch to work. The hostname must resolve to localhost
-/// so that URLs registered in the SP registry work from both the host and inside containers.
-///
-/// On macOS with Docker Desktop, this works automatically.
-/// On Linux, users must add `127.0.0.1 host.docker.internal` to /etc/hosts.
+/// check that host.docker.internal is reachable from containers.
+/// podman injects it automatically (169.254.1.2 via host-gateway);
+/// docker desktop does the same on macOS. on docker-on-linux without
+/// desktop, users need an /etc/hosts entry -- but we only check that
+/// if we're not running under podman.
 fn check_host_docker_internal() -> Result<(), Box<dyn std::error::Error>> {
+    if crate::docker::core::is_podman() {
+        info!("podman detected -- host.docker.internal injected automatically");
+        return Ok(());
+    }
+
     info!("Checking host.docker.internal resolution...");
+    let resolved = "host.docker.internal:80"
+        .to_socket_addrs()
+        .ok()
+        .map(|addrs| addrs.into_iter().any(|a| a.ip().is_loopback()))
+        .unwrap_or(false);
 
-    // Try to resolve host.docker.internal:80 (port doesn't matter, just need DNS resolution)
-    match "host.docker.internal:80".to_socket_addrs() {
-        Ok(mut addrs) => {
-            // Check if any resolved address is 127.0.0.1
-            let is_localhost = addrs.any(|addr| addr.ip().is_loopback());
-
-            if is_localhost {
-                info!("✓ host.docker.internal resolves to localhost");
-                Ok(())
-            } else {
-                error!("════════════════════════════════════════════════════════════════════");
-                error!("ERROR: host.docker.internal does not resolve to localhost (127.0.0.1)");
-                error!("════════════════════════════════════════════════════════════════════");
-                error!("");
-                error!("SP-to-SP fetch requires host.docker.internal to resolve to 127.0.0.1");
-                error!("so that registered SP URLs work from both host and containers.");
-                error!("");
-                error!("To fix this, add the following line to /etc/hosts:");
-                error!("");
-                error!("    127.0.0.1 host.docker.internal");
-                error!("");
-                error!("You can do this with:");
-                error!("    echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts");
-                error!("");
-                error!("════════════════════════════════════════════════════════════════════");
-                Err("host.docker.internal must resolve to 127.0.0.1".into())
-            }
-        }
-        Err(_) => {
-            error!("════════════════════════════════════════════════════════════════════");
-            error!("ERROR: host.docker.internal does not resolve");
-            error!("════════════════════════════════════════════════════════════════════");
-            error!("");
-            error!("SP-to-SP fetch requires host.docker.internal to resolve to 127.0.0.1");
-            error!("so that registered SP URLs work from both host and containers.");
-            error!("");
-            error!("Add the following line to /etc/hosts:");
-            error!("");
-            error!("    127.0.0.1 host.docker.internal");
-            error!("");
-            error!("You can do this with:");
-            error!("    echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts");
-            error!("");
-            error!("For GitHub Actions, add this step before running foc-devnet:");
-            error!("    - run: echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts");
-            error!("");
-            error!("════════════════════════════════════════════════════════════════════");
-            Err("host.docker.internal must be resolvable".into())
-        }
+    if resolved {
+        info!("host.docker.internal resolves to localhost");
+        Ok(())
+    } else {
+        error!("host.docker.internal does not resolve to 127.0.0.1");
+        error!("add to /etc/hosts: 127.0.0.1 host.docker.internal");
+        Err("host.docker.internal must be resolvable".into())
     }
 }
 
@@ -190,37 +156,23 @@ fn perform_regenesis_legacy() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Err(e) = result {
                 if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    // podman userns mapping can leave files owned by mapped UIDs;
+                    // podman unshare runs as the mapped root to reclaim them
                     warn!(
-                        "Permission denied removing {}, trying with Docker...",
+                        "Permission denied removing {}, trying podman unshare...",
                         path.display()
                     );
-                    // Fallback to Docker
-                    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("/"));
-                    let file_name = path.file_name().unwrap().to_string_lossy();
-
-                    let status = std::process::Command::new("docker")
-                        .args([
-                            "run",
-                            "-u",
-                            "root",
-                            "-v",
-                            &format!("{}:/work", parent.display()),
-                            crate::constants::BUILDER_DOCKER_IMAGE,
-                            "rm",
-                            "-rf",
-                            &format!("/work/{}", file_name),
-                        ])
+                    let status = std::process::Command::new("podman")
+                        .args(["unshare", "rm", "-rf", &path.display().to_string()])
                         .status()?;
-
-                    if status.success() {
-                        info!("Removed with Docker: {}", path.display());
-                    } else {
+                    if !status.success() {
                         return Err(format!(
-                            "Failed to remove {} even with Docker",
+                            "Failed to remove {} (even with podman unshare)",
                             path.display()
                         )
                         .into());
                     }
+                    info!("Removed via podman unshare: {}", path.display());
                 } else {
                     return Err(e.into());
                 }
@@ -411,7 +363,6 @@ fn execute_cluster_steps(
     run_id: &str,
     config: &Config,
     parallel: bool,
-    portainer_port: u16,
 ) -> Result<SetupContext, Box<dyn std::error::Error>> {
     // Ensure genesis prerequisites are ready (one-time setup, needs config for sector count)
     ensure_genesis_prerequisites(config.active_pdp_sp_count, run_id)?;
@@ -438,7 +389,6 @@ fn execute_cluster_steps(
         run_dir: run_dir.to_path_buf(),
         port_start: config.port_range_start,
         port_count: config.port_range_count,
-        portainer_port: Some(portainer_port),
         active_pdp_sp_count: config.active_pdp_sp_count,
         approved_pdp_sp_count: config.approved_pdp_sp_count,
         endorsed_pdp_sp_count: config.endorsed_pdp_sp_count,
@@ -490,16 +440,6 @@ pub fn start_cluster(parallel: bool, run_id: String) -> Result<(), Box<dyn std::
 
     let config = load_and_validate_config()?;
 
-    // Allocate port for Portainer (first port in dynamic range)
-    let mut port_allocator = crate::port_allocator::PortAllocator::new(
-        config.port_range_start,
-        config.port_range_count,
-    )?;
-    let portainer_port = port_allocator.allocate()?;
-
-    // Start Portainer
-    start_portainer(&run_id, portainer_port)?;
-
     // Create networks
     create_all_networks(&run_id, config.active_pdp_sp_count)?;
 
@@ -510,7 +450,6 @@ pub fn start_cluster(parallel: bool, run_id: String) -> Result<(), Box<dyn std::
         &run_id,
         &config,
         parallel,
-        portainer_port,
     );
 
     // Always run post-start teardown: persist logs, cleanup dead containers, write status

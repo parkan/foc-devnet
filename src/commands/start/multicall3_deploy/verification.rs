@@ -2,7 +2,7 @@
 //!
 //! This module handles the verification of deployed Multicall3 contracts.
 
-use crate::docker::command_logger::run_and_log_command_strings;
+use crate::docker::builder::ContainerRunBuilder;
 use std::error::Error;
 use tracing::{info, warn};
 
@@ -15,55 +15,40 @@ pub fn verify_multicall3(
 ) -> Result<(), Box<dyn Error>> {
     info!("Verifying Multicall3 contract functions...");
 
-    // Wait a bit for transaction confirmation
     info!("Waiting for transaction confirmation...");
     std::thread::sleep(std::time::Duration::from_secs(6));
 
-    // Verify that the contract exists at the address using cast
     let verify_cmd = format!("cast code {} --rpc-url {}", contract_address, lotus_rpc_url);
 
     let run_id = context.run_id();
-    let container_name = format!("foc-{}-multicall3-verify", run_id);
-    let args: Vec<String> = vec![
-        "run".to_string(),
-        "--name".to_string(),
-        container_name,
-        "-u".to_string(),
-        "foc-user".to_string(),
-        "--network".to_string(),
-        "host".to_string(),
-        crate::constants::BUILDER_DOCKER_IMAGE.to_string(),
-        "bash".to_string(),
-        "-c".to_string(),
-        verify_cmd,
-    ];
-
     let key = format!("multicall3_verify_{}", contract_address);
-    let output = run_and_log_command_strings("docker", &args, context, &key)?;
+    let output =
+        ContainerRunBuilder::builder_ephemeral(&format!("foc-{}-multicall3-verify", run_id))
+            .cmd(&["bash", "-c", &verify_cmd])
+            .run_logged(context, &key)?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {
-        warn!("⚠ Verification failed");
+        warn!("Verification failed");
         if !stderr.is_empty() {
-            info!("Error output:");
             for line in stderr.lines() {
                 info!("{}", line);
             }
         }
-        info!("→ Continuing despite verification warning");
+        info!("Continuing despite verification warning");
         return Ok(());
     }
 
     if stdout.trim() == "0x" || stdout.trim().is_empty() {
-        warn!("⚠ No contract code found at address {}", contract_address);
-        info!("→ Continuing despite verification warning");
+        warn!("No contract code found at address {}", contract_address);
+        info!("Continuing despite verification warning");
         return Ok(());
     }
 
     info!(
-        "✓ Multicall3 contract code verified at {}",
+        "Multicall3 contract code verified at {}",
         contract_address
     );
     Ok(())

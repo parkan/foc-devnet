@@ -52,6 +52,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g pnpm
 
+# switch back to foc-user -- all runtime execution should be non-root
+USER foc-user
+
 # Set working directory
 WORKDIR /workspace
 

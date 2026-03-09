@@ -4,7 +4,7 @@
 //! started and all services are accessible.
 
 use super::super::step::SetupContext;
-use crate::docker::command_logger::run_and_log_command;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::docker::containers::lotus_container_name;
 use crate::docker::wait_for_port;
 use std::error::Error;
@@ -31,17 +31,12 @@ pub fn check_lotus_api(context: &SetupContext) -> Result<(), Box<dyn Error>> {
 
     // Try to execute a simple lotus command via docker exec
     let key = format!("lotus_api_check_{}", container_name);
-    let output = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            &container_name,
+    let output = ContainerRunBuilder::exec(&container_name)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/lotus",
             "version",
-        ],
-        context,
-        &key,
-    )?;
+        ])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(
@@ -122,24 +117,16 @@ pub fn check_ethereum_rpc(context: &SetupContext) -> Result<(), Box<dyn Error>> 
 
     // Test eth_blockNumber via docker exec
     // This is a simple, safe RPC call that should work if FEVM is enabled
+    let curl_cmd = format!(
+        "curl -s -X POST -H 'Content-Type: application/json' \
+        --data '{{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}}' \
+        http://localhost:{}/rpc/v1",
+        lotus_api_port
+    );
     let key = format!("lotus_fevm_check_{}", container_name);
-    let output = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            &container_name,
-            "/bin/bash",
-            "-c",
-            &format!(
-                "curl -s -X POST -H 'Content-Type: application/json' \
-                --data '{{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}}' \
-                http://localhost:{}/rpc/v1",
-                lotus_api_port
-            ),
-        ],
-        context,
-        &key,
-    )?;
+    let output = ContainerRunBuilder::exec(&container_name)
+        .cmd(&["/bin/bash", "-c", &curl_cmd])
+        .run_logged(context, &key)?;
 
     if !output.status.success() {
         return Err(format!(

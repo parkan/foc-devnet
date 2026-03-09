@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::commands::start::step::SetupContext;
-use crate::docker::command_logger::run_and_log_command;
+use crate::docker::builder::ContainerRunBuilder;
 use crate::docker::containers::lotus_container_name;
 use crate::paths::foc_devnet_lotus_keys;
 
@@ -44,19 +44,14 @@ pub fn import_faucet_key(
     let container_path = format!("/keys/{}", relative_path.display());
 
     let key = format!("eth_acc_import_key_{}", container_name);
-    let output = run_and_log_command(
-        "docker",
-        &[
-            "exec",
-            &container_name,
+    let output = ContainerRunBuilder::exec(&container_name)
+        .cmd(&[
             "/usr/local/bin/lotus-bins/lotus",
             "wallet",
             "import",
             &container_path,
-        ],
-        context,
-        &key,
-    )?;
+        ])
+        .run_logged(context, &key)?;
 
     // Clean up the temp file
     let _ = fs::remove_file(&temp_key_file);
